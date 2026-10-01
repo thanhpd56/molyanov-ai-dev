@@ -97,9 +97,11 @@ hay không.
 - Hỗ trợ cả hai cách xác thực: Claude subscription OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) và
   Anthropic API key (`ANTHROPIC_API_KEY`) — người dùng chọn lúc setup, không cố định cứng.
 - Mọi job gọi `claude -p` phải chạy ở chế độ permission không tương tác, có sẵn danh sách tool
-  được phép (git, `gh`, Skill, Agent) — cùng cách `claude-code-action` của Anthropic đã dùng để
-  chạy headless trong CI. Không cấu hình điều này, job sẽ treo chờ xác nhận mà không ai trả lời
-  được.
+  được phép đúng theo tên tool thật của Claude Code — `Bash` (để chạy `git`/`gh`), `Read`, `Write`,
+  `Edit`, `Skill`, `Agent` — cùng cách `claude-code-action` của Anthropic đã dùng để chạy headless
+  trong CI. Không cấu hình đủ danh sách này, bất kỳ lệnh ghi file hay chạy shell nào trong job
+  (interview commit, implement code-writing, finalize archive) đều sẽ treo chờ xác nhận mà không
+  ai trả lời được.
 - Tái dùng nguyên vẹn `assets/user-spec.md.template`, `assets/interview.yml.template`,
   `assets/decisions.md.template`, `scripts/init-feature-folder.sh` của `user-spec-planning`, không
   tạo định dạng riêng, để các reviewer agent (`skeptic`, `userspec-quality-validator`,
@@ -249,8 +251,11 @@ hay không.
 |------|-----------------|
 | 1. Chạy `setup-online-pipeline.sh` trên một repo demo nhỏ (không cần GitHub App/token thật) | Workflow YAML được copy đúng vào `.github/workflows/`, cú pháp YAML hợp lệ (lint), `gh secret set` được gọi đúng cú pháp, script in ra đúng 2 bước thủ công còn lại (cài GitHub App, tạo token) |
 | 2. Đọc lại các workflow file đã sinh ra | Tên branch/label dùng đúng theo spec (`userspec/{slug}`+`userspec-spec`, `feature/{slug}`+`userspec-implement`); mọi job nghe `issue_comment` có điều kiện lọc tác giả bot |
-| 3. Kiểm tra sửa đổi trong `documentation-writing/SKILL.md` | Nhánh tự động mới không đổi hành vi nhánh tương tác hiện có |
+| 3. Kiểm tra sửa đổi trong `documentation-writing/SKILL.md` | Nhánh tự động mới không đổi hành vi nhánh tương tác hiện có; nhánh mới nhận diện đúng literal `AUTOMATED_FINALIZE` |
 | 4. Tạo project mới qua `project-initialization` với online-pipeline được bật | Scaffold project mới có đủ file workflow + hướng dẫn setup (kiểm tra tĩnh, không chạy vòng đời thật) |
+| 5. Đọc workflow file của job implement/finalize | Có khai báo permission mode không tương tác với đủ tool allowlist (`Bash`, `Read`, `Write`, `Edit`, `Skill`, `Agent`) |
+| 6. Đọc khối `concurrency:` của workflow theo issue | Có `cancel-in-progress: false` (không phải mặc định hủy job) |
+| 7. Đọc prompt/script gọi finalize | Có chứa đúng literal chuỗi tín hiệu `AUTOMATED_FINALIZE` được truyền vào lệnh gọi `claude -p` |
 
 Agent chỉ kiểm tra được các mục tĩnh trên (file đúng chỗ, cú pháp hợp lệ, cấu hình đúng tên). Agent
 không thể tự tạo issue GitHub thật, chờ nhiều ngày, hay tự trả lời comment hộ người dùng — nên toàn
@@ -287,3 +292,7 @@ thật, không thể mô phỏng bằng agent chạy một lần.
     job đầu chạy xong (không bị hủy giữa lúc đang commit `interview.yml`).
 14. Theo dõi log Actions trong suốt quá trình trên → không có lần chạy nào bị tự kích hoạt lại bởi
     comment do chính bot tạo ra; mọi job `claude -p` chạy xong không bị treo chờ xác nhận tool nào.
+15. Dùng một feature demo mà `documentation-writing` sẽ đánh giá là "chưa hoàn chỉnh" (vd cố ý chỉ
+    implement một phần user-spec trước khi merge) rồi merge PR code → finalize vẫn chạy thẳng, không
+    hỏi lại xác nhận, vì nhận diện đúng tín hiệu `AUTOMATED_FINALIZE` — xác nhận nhánh tự động mới
+    thực sự chặn được bước "hỏi tiếp tục" chứ không chỉ lý thuyết.
