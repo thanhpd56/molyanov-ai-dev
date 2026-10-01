@@ -37,3 +37,20 @@ The project uses a **spec-driven approach** with AI agents:
 
 Future feature ideas and known bugs are tracked in `backlog.md`. Active feature and bug work lives
 in the `work/` folder.
+
+## Online Pipeline (optional)
+
+This repo already has the GitHub Actions workflow files to run the whole feature lifecycle (issue →
+interview → spec PR → approve → implement → code PR → finalize) through GitHub only, no local
+terminal needed. They are inert until setup is finished:
+
+1. Install the Claude GitHub App on this repository (run `claude` locally once and use
+   `/install-github-app`, or visit https://github.com/apps/claude).
+2. Create a Claude auth credential — `claude setup-token` (OAuth) or an API key from
+   https://console.anthropic.com — and store it as the `CLAUDE_CODE_OAUTH_TOKEN` or
+   `ANTHROPIC_API_KEY` repo secret.
+3. Create a Personal Access Token (`repo` scope) at https://github.com/settings/tokens and store it
+   as the `GH_PAT` repo secret (needed only so approving a spec PR can trigger the implement job).
+
+No script needed for this repo — the workflow files are already in place. Once the secrets are set,
+open a new issue to start the pipeline.

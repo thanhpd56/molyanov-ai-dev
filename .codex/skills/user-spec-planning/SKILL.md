@@ -145,7 +145,14 @@ and record the answer through the existing interview loop before changing the sp
   user request.
 
 If a session ends after drafting, a later run starts a new validation from round 1; old reviewer
-responses are not persisted or reconstructed.
+responses are not persisted or reconstructed. This is also true when the calling context includes
+the literal signal `ONLINE_PIPELINE_AUTOMATED`, with one exception: before asking the user and
+stopping for a `user_decision_required` finding, save the current round number and the pending
+finding to `interview.yml`'s `automated_validate_state` field, then ask and stop as usual. A later
+automated run that finds `automated_validate_state` set and a new answer available re-runs the full
+round it names (all three reviewers again, not round 1) with that answer, then clears the field once
+the round produces a result. Without the literal signal, ignore `automated_validate_state` and
+always start a new validation from round 1 as above.
 
 ### 6. Obtain Approval
 

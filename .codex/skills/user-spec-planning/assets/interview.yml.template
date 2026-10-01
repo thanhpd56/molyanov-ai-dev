@@ -7,6 +7,15 @@ interview_metadata:
   status: "in_progress"  # in_progress | completed
   can_resume: true
 
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
 conversation_history: []
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
