@@ -280,6 +280,38 @@ conversation_history:
       1 ok
       2. ok
       3 a
+  - asked_at: "2026-10-01 03:40:00"
+    topic_keys: ["constraints", "error_scenarios", "technical_decisions"]
+    agent_questions: |
+      [Validation round 2 (adequacy) found 4 new gaps after round-1 fixes. Asked:]
+      1. (Critical) Nothing in the spec addresses how non-interactive `claude -p` runs in GitHub
+         Actions get past Claude Code's normal tool-call permission-approval gate (git push, PR
+         creation, Skill/Agent invocation) - could hang waiting for approval nobody can give.
+         Proposed: add a constraint that every pipeline job invokes `claude` with a non-interactive
+         permission mode and a pre-approved tool allowlist (same solved pattern claude-code-action
+         already uses). Agree?
+      2. (Major) Finalize-retry only covers failure BEFORE the final commit; a failure AFTER the
+         commit lands (e.g. network blip right after push, before the job exits) would re-run
+         finalize against already-archived state. Proposed: before retrying, finalize checks whether
+         work/{feature} has already moved to work/completed/{feature} on main; if so, treat as
+         already done and skip the retry. Agree?
+      3. (Major) The round-1 fix for documentation-writing's automated branch relied on the model
+         inferring "automated context" from the prompt, which is unreliable - if it infers wrong, it
+         falls back to asking, and nobody can answer. Proposed: online-pipeline's finalize invocation
+         includes a fixed, explicit signal phrase (e.g. "AUTOMATED_FINALIZE: no one will answer,
+         always continue without asking") and documentation-writing's new branch checks for that
+         exact phrase instead of inferring - explained with a flag-on/flag-off analogy after the user
+         said they didn't understand. Agree?
+      4. (Major) No concurrency policy defined for two overlapping issue_comment triggers on the SAME
+         issue (e.g. user double-comments while the first job is mid-commit of interview.yml) -
+         GitHub Actions' common cancel-in-progress default could interrupt a commit mid-write.
+         Proposed: the per-issue concurrency group queues (cancel-in-progress: false) instead of
+         cancelling, so a second trigger always waits for the first job to finish. Agree?
+    user_answer: |
+      1. ok
+      2. ok
+      3. ko hiểu lắm. [agent explained with a concrete flag-on/flag-off analogy] oke
+      4. ok
   - asked_at: "2026-10-01 02:25:00"
     topic_keys: ["integration_points", "error_scenarios", "constraints"]
     agent_questions: |
