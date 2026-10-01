@@ -45,8 +45,9 @@ hay không.
 5. Bot chạy job implement: `claude -p` không tương tác, thực hiện `user-spec.md` đã duyệt, mở một PR
    code (branch `feature/{slug}`, label `userspec-implement`) trong cùng repo.
    - Nếu job implement gặp lỗi kỹ thuật (Claude lỗi, push conflict, hết quota): tự động retry tối đa
-     2 lần, mỗi lần reset branch về trạng thái sạch (force-push) trước khi làm lại từ đầu. Sau 2 lần
-     vẫn lỗi: comment báo lỗi lên issue và dừng.
+     2 lần, mỗi lần reset branch về **commit gần nhất đã lưu** (force-push) — không phải điểm khởi
+     tạo branch, nên nếu trước đó đã có một checkpoint từ lượt dừng-hỏi-quyết-định, checkpoint đó
+     không bị mất. Sau 2 lần vẫn lỗi: comment báo lỗi lên issue và dừng.
    - Nếu quá trình review trong lúc implement (`code-reviewer`/`security-auditor`) phát hiện cần
      người dùng quyết định (không phải lỗi kỹ thuật): bot commit phần đã làm xong, comment câu hỏi
      lên issue, dừng — không tính vào 2 lần retry. Người dùng trả lời, bot tiếp tục từ đúng branch đó
@@ -93,8 +94,9 @@ hay không.
       tiếp theo tự phát hiện `work/{feature}/` đã archive xong trên main, dừng ngay, không chạy lại.
 - [ ] Hai issue (hai feature) mở gần nhau trên cùng repo chạy độc lập không chặn nhau; hai job
       finalize trùng thời điểm chạy tuần tự, không ghi đè nhau lên Project Knowledge.
-- [ ] Hoạt động cả trên project có sẵn (bật online-pipeline độc lập) và project mới tạo (tích hợp vào
-      `project-initialization`).
+- [ ] Hoạt động cả trên project có sẵn (bật online-pipeline độc lập, tự chạy script setup) và project
+      mới tạo qua `project-initialization` (scaffold có sẵn file workflow + hướng dẫn setup theo
+      **mặc định**, không cần chạy thêm script riêng).
 - [ ] Comment do chính bot tạo ra (câu hỏi, thông báo, báo lỗi, hỏi quyết định) **không** tự kích
       hoạt lại một lần chạy job mới.
 
@@ -187,6 +189,12 @@ hay không.
 - Setup ban đầu cho 1 repo gồm 2 bước không thể tự động hoá (đòi hỏi xác thực qua trình duyệt của
   chính người dùng): cài Claude GitHub App vào repo, và tạo OAuth token (`claude setup-token`) hoặc
   API key. Phần còn lại (thêm secret, copy workflow YAML) được tự động hoá bằng một script setup.
+- Scope bao gồm thêm một thay đổi nhỏ vào `skills/project-initialization/assets/new-project/`: bổ
+  sung sẵn file workflow của online-pipeline theo **mặc định** cho mọi project mới (không có câu
+  hỏi bật/tắt trong lúc khởi tạo, không cần sửa logic của `project-initialization/SKILL.md`) —
+  workflow này ở trạng thái "ngủ" cho tới khi người dùng tự chạy script setup (cài GitHub App, tạo
+  token, set secret) để thực sự kích hoạt. Với project có sẵn, người dùng tự chạy script setup (bao
+  gồm copy workflow) như một bước độc lập, không qua `project-initialization`.
 
 ## Risks
 - **Risk 1:** Chi phí API/quota tăng vì chạy nhiều feature song song cộng với tối đa 2 lần retry mỗi
@@ -284,6 +292,10 @@ hay không.
 - Sửa lại (sau validate round 5 — phát hiện của adequacy): "reset về sạch" khi implement lỗi nghĩa
   là reset về **commit gần nhất trên branch**, không phải điểm khởi tạo branch — để không xoá mất
   một quyết định người dùng đã trả lời và được commit trước đó trong cùng job.
+- Thêm scope cho `project-initialization` (sau validate round 6 — phát hiện của quality và
+  adequacy, trùng nhau): cơ chế tích hợp "project mới có online-pipeline theo mặc định" chưa từng
+  được mô tả, dù đã được thống nhất ở interview từ sớm. Bổ sung: chỉ thêm file workflow (ở trạng
+  thái "ngủ") vào `assets/new-project/`, không sửa logic của `project-initialization/SKILL.md`.
 
 ## Testing
 
