@@ -1,0 +1,578 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-01 00:00:00"
+  last_updated: "2026-10-01 02:30:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+conversation_history:
+  - asked_at: "2026-10-01 00:05:00"
+    topic_keys: ["feature_description", "work_type", "technical_decisions", "integration_points"]
+    agent_questions: |
+      1. Phạm vi: đây là thêm một skill mới trong repo molyanov-ai-dev (cùng cấp project-initialization),
+         chứa asset là workflow YAML + script mẫu để dự án 1-repo dùng framework này bật tính năng
+         request/interview/approve/implement online qua GitHub Actions. Đúng không, hay bạn hình dung
+         khác (vd: chỉ là tài liệu hướng dẫn, không sinh file thật)?
+      2. Auth cho workflow: hỗ trợ cả subscription OAuth token và API key để người dùng chọn lúc setup,
+         hay mặc định cố định một cách?
+      3. Trigger cụ thể: issues:opened -> bắt đầu interview; issue_comment:created -> tiếp interview
+         hoặc nhận lệnh /approve; sau approve -> 1 job chạy claude -p theo user-spec.md đã duyệt, tạo
+         branch + PR trong cùng repo. Giữ nguyên bộ trigger này, hay thêm/bớt sự kiện (vd /reject,
+         /revise)?
+      4. Reuse template hiện có: user-spec-planning đã có sẵn user-spec.md.template,
+         interview.yml.template, init-feature-folder.sh. Online pipeline có nên tái dùng chính các
+         template/script này (chạy trong CI thay vì local), hay cần một luồng/định dạng dữ liệu riêng?
+    user_answer: |
+      1 đúng rồi.
+      2. cả 2
+      3. đủ rồi
+      4 nếu dùng lại thì sẽ bị ảnh hưởng gì, nếu không dùng thì sao nhỉ?
+
+      [Agent explained the trade-off: reusing keeps the existing interview.yml schema compatible
+      with interview-completeness-checker/skeptic/userspec-*-validator and the non-interactive
+      init-feature-folder.sh works unchanged in CI, but requires a new behavior not in the current
+      skill — committing + pushing interview.yml after every single interview turn (not just at
+      draft/validation/approve milestones) to a dedicated branch, since each GitHub Actions run is a
+      fresh checkout with no in-memory session continuity; also requires a `concurrency:` group per
+      issue to avoid two overlapping comment-triggered jobs clobbering the same state. Not reusing
+      means rebuilding the reviewer agents' input contract and risking drift between local and
+      online user-spec formats over time.]
+
+      User confirmed: "Ok được." (agreed to reuse templates/scripts with the two added operational
+      adjustments: commit-per-turn to a dedicated branch, and concurrency guard.)
+  - asked_at: "2026-10-01 00:20:00"
+    topic_keys: ["feature_description"]
+    agent_questions: |
+      User asked (off the pending question batch): does the agent running in GitHub Actions after
+      each comment retain conversation context, or is it a brand-new session each time? Can it
+      support multiple Claude accounts?
+    user_answer: |
+      [Agent answered: each GitHub Actions trigger is a fresh session with no built-in memory;
+      claude-code-action's own maintainers confirmed "continuing conversations" is not yet a native
+      feature — each run re-reads the full issue/PR thread as context. This matches the already
+      agreed design (commit interview.yml every turn, each run resumes via the skill's existing
+      Start-or-Resume path), so no design change needed. On multi-account: community tools exist to
+      rotate multiple personal Max/Pro subscriptions, but agent advised against it as a gray area
+      against individual-use subscription terms; recommended API key billing instead if more
+      throughput is needed.]
+  - asked_at: "2026-10-01 00:25:00"
+    topic_keys: ["integration_points", "constraints", "error_scenarios", "testing_strategy"]
+    agent_questions: |
+      1. Skill nên standalone (bật online cho project có sẵn) hay tích hợp mặc định vào
+         project-initialization?
+      2. Lệnh /approve có cần kiểm tra đúng là bạn (GitHub actor) mới chấp nhận, hay chấp nhận rủi ro
+         vì repo private chỉ mình bạn?
+      3. Job implement lỗi giữa chừng: chỉ cần comment báo lỗi để bạn tự chạy lại, hay cần auto-retry?
+      4. "Xong" = review kỹ YAML + chạy thử thật trên 1 repo demo, hay cần thêm gì (unit test cho
+         script...)?
+    user_answer: |
+      1. cả 2 proj cũ và mới
+      2. chấp nhận
+      3 tự chạy lại
+      4 chạy với proj nhỏ demo.
+  - asked_at: "2026-10-01 00:35:00"
+    topic_keys: ["constraints", "error_scenarios", "testing_strategy", "edge_cases"]
+    agent_questions: |
+      1. Giới hạn auto-retry: đề xuất tối đa 2 lần cho job implement, sau đó dừng và comment báo lỗi.
+         Đồng ý con số này hay muốn khác?
+      2. Lỗi ở các bước khác (interview turn, draft/validate): cùng cơ chế auto-retry, hay chỉ
+         auto-retry riêng cho implement?
+      3. Tiêu chí "demo repo chạy qua được": đủ 4 bước (issue mới -> hỏi; trả lời -> PR spec; approve
+         -> PR spec đóng; implement -> PR code) là pass, hay cần thêm case (vd thử path lỗi để xem
+         retry hoạt động)?
+      4. Nhiều feature song song trên cùng repo (2 issue gần nhau): hỗ trợ ngay trong nâng cấp này,
+         hay để ngoài phạm vi (xử lý tuần tự) và làm sau?
+    user_answer: |
+      1. giới hạn 2 lần
+      2. chỉ bước implement thôi.
+      3. 4 bước, bổ sung cả case retry
+      4.Làm luôn song song.
+  - asked_at: "2026-10-01 00:45:00"
+    topic_keys: ["edge_cases", "success_criteria", "user_problem", "risks"]
+    agent_questions: |
+      1. Phạm vi có bao gồm bước finalize (documentation-writing cập nhật Project Knowledge, chuyển
+         work/{feature} sang work/completed/{feature}) không? Đây là điểm duy nhất 2 feature song
+         song có thể đụng nhau.
+      2. Xác nhận success criteria: "Có thể tạo yêu cầu, trả lời interview, approve, và nhận PR code
+         hoàn toàn qua GitHub (web/điện thoại) - không cần mở máy tính hay chạy claude CLI local ở
+         bất kỳ bước nào." Đúng ý bạn chứ?
+      3. Xác nhận user_problem: hiện tại methodology bắt buộc ngồi máy tính mở phiên CLI; bạn muốn
+         tạo/theo dõi feature mọi lúc mọi nơi, không phụ thuộc máy tính có bật hay không. Đúng không?
+      4. Risks: (a) chi phí API/quota tăng vì chạy song song + retry 2 lần; (b) /approve không kiểm
+         tra actor, rủi ro nếu lỡ để repo public. Mitigation: (a) giữ nguyên giới hạn retry=2, không
+         giới hạn số feature song song; (b) khuyến cáo giữ repo private. Đủ hay cần thêm risk khác?
+    user_answer: |
+      1. Bao gồm cả finlaized
+      2. đúng.
+      3. đúng
+      4 đủ rồi.
+  - asked_at: "2026-10-01 00:55:00"
+    topic_keys: ["edge_cases", "user_stories", "manual_user_actions", "deploy_approach"]
+    agent_questions: |
+      1. Trigger cho finalize: tự động ngay khi PR code merge, hay cần xác nhận thêm bằng comment
+         (vd /finalize)?
+      2. Cơ chế tránh 2 finalize đụng nhau: dùng chung 1 concurrency group cố định
+         (finalize-project-knowledge) cho mọi job finalize trong repo, chạy tuần tự khi 2 feature
+         merge gần nhau. Đồng ý chứ?
+      3. Xác nhận user story: mở GitHub (web/app) từ bất kỳ đâu -> tạo issue -> nhận notification hỏi
+         interview -> trả lời -> nhận notification PR spec sẵn sàng -> /approve -> nhận notification
+         PR code xong -> review & merge -> finalize tự chạy. Đúng luồng, hay thiếu bước nào?
+      4. Setup ban đầu 1 lần/repo: cài Claude GitHub App, tạo OAuth token/API key, thêm GitHub
+         Secrets, copy workflow YAML vào .github/workflows/. Đủ chưa?
+    user_answer: |
+      1 tự động khi merge luôn.
+      2 ok
+      3 chuẩn
+      4 có cách gì tự động ko nhỉ?
+
+      [Agent explained: 2 of 4 setup steps are fully scriptable (gh secret set for the token; copying
+      the workflow YAML into .github/workflows/ + commit/push), bundled into one
+      setup-online-pipeline.sh script. The other 2 steps cannot be scripted because they require the
+      user's own browser-based authentication/consent: installing the Claude GitHub App on the repo
+      (GitHub requires interactive consent, no API bypass) and generating the OAuth token or API key
+      (claude setup-token / Anthropic Console both require interactive login). Proposed: the setup
+      script automates what it can and prints instructions + pauses at exactly those 2 manual steps.
+      Framed as a one-time per-repo cost, not a recurring one, so it does not violate the "no need to
+      turn on the computer" goal for day-to-day feature work.]
+
+      User confirmed: "ok"
+  - asked_at: "2026-10-01 01:10:00"
+    topic_keys: ["acceptance_criteria", "verification_strategy", "error_scenarios"]
+    agent_questions: |
+      [After direct code research since the code-researcher subagent hit a session rate limit:]
+      documentation-writing's Feature Finalization Mode has a built-in branch: "if the feature is
+      evidently incomplete, explain the concrete gap and ask whether to continue finalization" -
+      with no defined behavior for a fully automated, PR-merge-triggered finalize job. Choose:
+      A. Skip that check, always finalize (PR already reviewed and merged by the user = implicit
+         confirmation).
+      B. Keep the check; on a detected gap, comment on the issue and stop short of archiving,
+         leaving work/{feature}/ for manual finalization.
+
+      Also proposed concrete acceptance criteria (8 items: issue opens -> first question; interview
+      rounds -> spec PR; /approve -> spec PR closes + implement starts; implement succeeds -> code
+      PR appears; implement fails -> retry up to 2 then notify+stop; code PR merges -> finalize runs
+      automatically (Project Knowledge updated, work/{feature} archived); two parallel issues don't
+      block each other and their finalize jobs serialize; works on both an existing project
+      (standalone) and a newly created one (project-initialization integration)) and a verification
+      strategy (exercise all 8 criteria against one real demo repo, no unit tests for the scripts).
+    user_answer: |
+      A đi.
+      Còn lai ok rồi.
+  - asked_at: "2026-10-01 01:30:00"
+    topic_keys: ["acceptance_criteria", "error_scenarios", "constraints", "verification_strategy"]
+    agent_questions: |
+      [Fresh interview-completeness-checker found 4 gaps. Asked:]
+      1. (Critical) When a reviewer (skeptic/quality/adequacy/completeness-checker) raises a
+         user_decision_required finding during an online validation round, there is no one present
+         to answer interactively. Proposed: treat it exactly like an interview question - bot
+         comments the question on the issue and stops the job; user replies by commenting; bot picks
+         it up and continues the validation round. Agree?
+      2. (Major) Does `/approve` merge the spec PR into main, or just close it? Proposed: `/approve`
+         merges the spec PR into main so user-spec.md/decisions.md land at a fixed, known path that
+         both the implement job and the later finalize job can read. Agree?
+      3. (Major) Earlier the agent warned OAuth subscription auth has a practical rate/concurrency
+         ceiling; the user separately chose uncapped parallel features and dual auth support (OAuth
+         + API key). These can collide under OAuth + heavy parallelism. Proposed: document this as a
+         known limitation, not auto-handled in v1 - if the user hits rate limits running many
+         parallel features under OAuth, they switch to an API key manually. Accept this limitation,
+         or want a queuing mechanism instead for OAuth mode?
+      4. (Minor) Add a verification step for the project-initialization-integrated path: create a
+         new project via project-initialization with online-pipeline enabled, confirm the scaffold
+         includes the workflow files and setup instructions (no need to run the full lifecycle on
+         it). Add this?
+    user_answer: |
+      1 ok
+      2 ok
+      3. chấp nhận
+      4. ok
+  - asked_at: "2026-10-01 01:50:00"
+    topic_keys: ["error_scenarios", "acceptance_criteria", "verification_strategy"]
+    agent_questions: |
+      [Fresh interview-completeness-checker round 2 found 3 more gaps. Asked:]
+      1. (Critical) The implement job's own code-writing flow can also surface a
+         user_decision_required finding (via code-reviewer/security-auditor), not just a technical
+         failure. Proposed: reuse the same pause/comment/resume mechanism as validation rounds (not
+         counted against the 2 retries, since retrying doesn't fix a decision question). Agree?
+      2. (Major) Each retry is a fresh checkout with no memory of a prior failed attempt's partial
+         git state. Proposed: a failure-retry resets the branch to a clean base and starts over
+         (force-push), rather than trying to resume partial work. Agree?
+      3. (Major) verification_strategy wasn't updated for AC9 (/approve merges, doesn't just close)
+         and AC10 (pause/resume mechanism). Add demo steps for both?
+    user_answer: |
+      1. dừng và chạy lại thì có bị implement từ đầu tốn token không
+      2 retry lúc lỗi thôi đúng không?
+      3. có.
+
+      [Agent clarified: the "reset branch and start over" policy from question 2 applies ONLY to
+      failure-retries (actual errors: Claude crash, push conflict, quota) - confirmed by the user.
+      For a decision-pause (not a failure), resetting would waste the work already done before the
+      judgment call. Proposed instead: before posting the question and stopping, the implement job
+      commits whatever work is already done to the branch. The resumed run (after the user answers)
+      checks out that same branch with the partial work already committed, reads the user's answer,
+      and continues from there - rather than redoing the already-completed work from scratch. So:
+      decision-pause = commit-then-continue (token cost limited to the remaining work); failure-retry
+      = reset-and-restart clean (the earlier attempt's partial state is assumed unreliable).]
+    agent_followup_confirmed: true
+  - asked_at: "2026-10-01 02:10:00"
+    topic_keys: ["error_scenarios", "edge_cases", "technical_decisions"]
+    agent_questions: |
+      [Fresh interview-completeness-checker round 3 found 3 more gaps. Asked:]
+      1. (Critical) `/approve` merging the spec PR into main and the code PR merging into main both
+         fire the same `pull_request: closed, merged=true` event - finalize has no way to tell them
+         apart and could fire prematurely on the spec-PR merge. Proposed: spec PR from branch
+         `userspec/{slug}` with a distinct label (e.g. `userspec-spec`); code PR from branch
+         `feature/{slug}` with a distinct label (e.g. `userspec-implement`); finalize's trigger
+         filters to the code-PR label/branch only. Agree?
+      2. (Major) Finalize's own job failure has no defined handling (no retry, no notification,
+         unlike every other job). Proposed: apply the same policy as implement - auto-retry up to 2
+         times, then comment the failure on the issue. Agree?
+      3. (Minor) Add a verification step confirming a failure-retry actually force-pushes a clean
+         base rather than resuming the prior failed attempt's partial commits. Add it?
+    user_answer: |
+      1. ok
+      2. ok
+      3 làm rõ thêm cho tôi sẽ ảnh hưởng gì khi force reset, có phương án nào khác để reuse lại được
+      kq cũ không
+
+      [Agent explained: force-reset means any correct work done before a crash is discarded, costing
+      full re-implementation tokens even if the failure happened at 90% done - chosen as the default
+      because nothing guarantees the on-disk/branch state after a crash is safe to build on. Of the
+      three failure causes (Claude error, push conflict, quota), only push conflict is provably safe
+      to resume cheaply (rebase + retry push, no re-run of Claude) since the code itself was already
+      correct; Claude error and quota exhaustion leave unknown partial state, so reset-and-restart
+      remains the only sound option for those. Offered a choice: split handling by failure type
+      (push-conflict = rebase+retry-push, not counted against the 2 retries; other failures =
+      reset-and-restart, counted) versus keeping it simple (reset-and-restart uniformly for all
+      three failure causes, accepting the extra token cost on push-conflict as the price of
+      simplicity).]
+
+      User chose: reset-and-restart uniformly for all failure causes (accepted the extra token cost
+      on push-conflict in exchange for simplicity - no failure-type branching in v1).
+  - asked_at: "2026-10-01 02:25:00"
+    topic_keys: ["integration_points", "error_scenarios", "constraints"]
+    agent_questions: |
+      [Fresh interview-completeness-checker round 4 found 1 critical gap. Asked:]
+      1. (Critical) Every stage posts its own issue comment (question, notification, failure,
+         decision-pause), but the only continuation trigger named is bare `issue_comment: created`,
+         which fires on ANY new comment including the bot's own. Without an author filter, the bot
+         re-triggers itself on its own comments (self-loop burning Actions/Claude quota, or
+         misreading its own comment as the user's answer). Proposed: every `issue_comment`-triggered
+         job adds a condition that skips runs where the comment author is the bot itself (e.g.
+         `github.event.comment.user.type != 'Bot'` or matching the bot's known login) - standard
+         practice, no real trade-off. Agree?
+    user_answer: |
+      ok
+# Entry format:
+# - asked_at: "YYYY-MM-DD HH:MM:SS"
+#   topic_keys: ["user_problem", "success_criteria"]
+#   agent_questions: |
+#     Full question batch, verbatim.
+#   user_answer: |
+#     Full user answer, verbatim.
+
+general_understanding:
+  feature_name:
+    score: 90
+    value: "New skill `online-pipeline` added to molyanov-ai-dev (skills/online-pipeline/), parallel to project-initialization and user-spec-planning"
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 80
+    value: |
+      Add a new skill to molyanov-ai-dev that lets a single-repo project run the planning lifecycle
+      (request -> interview -> approve -> implement -> PR) entirely through GitHub, without a local
+      CLI session. A GitHub issue is the request; issue comments carry the interview Q&A and the
+      `/approve` command; after approval a GitHub Actions job runs Claude Code non-interactively
+      against the approved user-spec, implements the change, and opens a PR in the same repo.
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature (new skill + bundled assets in molyanov-ai-dev)"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 85
+    value: |
+      Today the methodology requires sitting at a computer with an open Claude Code CLI session for
+      every step (plan, interview, approve, implement). The user wants to create and track a feature
+      anytime, anywhere (phone, browser), without depending on whether their computer is on.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 0
+    value: ""
+    gaps: ["Identify affected users when applicable"]
+    required: false
+
+  success_criteria:
+    score: 90
+    value: |
+      A feature's full lifecycle - create request, answer interview, approve, receive a code PR, and
+      finalize (Project Knowledge updated, work folder archived) - can be completed entirely through
+      GitHub (web or phone), without opening a computer or running `claude` CLI locally at any step.
+    gaps: []
+    required: true
+
+  constraints:
+    score: 95
+    value: |
+      Must support both Claude subscription OAuth token and Anthropic API key as auth (user's choice
+      at setup, not hardcoded). Must reuse user-spec-planning's existing user-spec.md.template,
+      interview.yml.template, and init-feature-folder.sh unchanged rather than inventing a new
+      format, so the existing reviewer agents stay compatible. No actor/identity check required on
+      `/approve` (user accepts the risk: solo dev, repo expected private). The implement job
+      auto-retries up to 2 times on failure before stopping and notifying; interview and
+      draft/validate steps do not auto-retry.
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 90
+    value: |
+      Definition of done for this skill: run it end-to-end against one small real demo repo, no
+      automated test suite for the bash scripts/YAML. Passing requires observing all of: (1) new
+      issue -> bot posts first interview question, (2) answering turns -> bot opens a PR with
+      user-spec.md for preview, (3) `/approve` comment -> that spec PR is closed/merged, (4)
+      implement job runs -> a code PR appears in the same repo. Also exercise the retry path at
+      least once (force/observe an implement failure and confirm it retries up to 2 times then
+      notifies).
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 90
+    value: |
+      As the solo owner, from anywhere (phone or browser): open GitHub, create an issue (the
+      request) -> get a GitHub notification for each interview question, reply by commenting ->
+      get a notification when a spec-preview PR is ready -> comment `/approve` -> get a notification
+      when the implement job opens the code PR -> review and merge from phone/browser -> finalize
+      runs automatically, nothing further required.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 90
+    value: |
+      1. Opening a new issue on an online-pipeline-enabled repo gets the first interview question as
+         a comment.
+      2. Answering through enough rounds gets a PR containing user-spec.md for preview.
+      3. Commenting `/approve` on that PR closes it and starts the implement job.
+      4. A successful implement job opens a code PR in the same repo.
+      5. A failed implement job auto-retries up to 2 times; if still failing, it comments the error
+         on the issue and stops (no further auto-retry).
+      6. Merging the code PR automatically runs finalize: Project Knowledge is updated and
+         work/{feature} is archived to work/completed/{feature}, with no incompleteness check
+         gating it (decision A - merge already implies confirmation).
+      7. Two issues (two features) opened close together on the same repo run independently without
+         blocking each other; if their finalize jobs would run at the same time, they serialize
+         instead of racing on Project Knowledge files.
+      8. The setup works both on an existing project (standalone enablement) and a newly created one
+         (project-initialization integration).
+      9. `/approve` merges the spec PR into main (not just closes it), so user-spec.md/decisions.md
+         land at a fixed, known path on main before the implement job runs.
+      10. During any validation round, a reviewer's `user_decision_required` finding is posted as an
+          issue comment and the job stops; the user's reply comment resumes that validation round -
+          the same mechanism as an interview turn, not a new one.
+      11. The implement job's own review flow (code-reviewer/security-auditor) raising a
+          `user_decision_required` finding uses the same pause/comment/resume mechanism as item 10,
+          committing finished work first so resume continues rather than restarts; this does not
+          count against the 2-retry failure limit.
+      12. An implement-job failure-retry resets the branch to a clean base (force-push) before each
+          attempt rather than resuming the failed attempt's partial state - applied uniformly to
+          every failure cause, no branching by failure type.
+      13. The spec PR (branch `userspec/{slug}`, label `userspec-spec`) and the code PR (branch
+          `feature/{slug}`, label `userspec-implement`) are distinguishable, so finalize's
+          `pull_request: closed, merged=true` trigger only fires on the code PR's label/branch and
+          never on the spec PR's merge.
+      14. A finalize-job failure follows the same policy as implement: auto-retry up to 2 times, then
+          comment the failure on the issue (no manual re-trigger command exists for finalize).
+      15. No job triggered by `issue_comment: created` ever re-triggers on the bot's own comment
+          (question, notification, failure, decision-pause) - verified by a filter on comment author
+          type/login.
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 85
+    value: |
+      Multiple features in parallel on the same repo (two issues opened close together) must be
+      supported in this upgrade, not deferred. Each feature keeps its own branch
+      (`userspec/{slug}`) and its own `concurrency:` group keyed by issue number, so two issues'
+      jobs do not block or clobber each other. Finalize (Project Knowledge update, archiving
+      work/{feature}) is in scope, confirmed as the one place two parallel features could still
+      conflict by editing the same Project Knowledge file. Finalize triggers automatically on
+      `pull_request: closed` with `merged=true` (no extra confirm step). All finalize jobs share one
+      fixed `concurrency:` group (e.g. `finalize-project-knowledge`) so concurrent merges finalize
+      one at a time instead of racing on the same Project Knowledge files.
+
+      The spec PR and the code PR both merge into main via the same event type, so they are
+      distinguished by branch/label: spec PR uses branch `userspec/{slug}` + label `userspec-spec`;
+      code PR uses branch `feature/{slug}` + label `userspec-implement`. Finalize's trigger filters
+      to the code-PR label/branch only, so merging the spec PR (at approve time) never fires
+      finalize prematurely.
+
+      Every job triggered by `issue_comment: created` filters out comments authored by the bot
+      itself (e.g. `github.event.comment.user.type != 'Bot'`), since the bot posts its own comment
+      after nearly every stage (question, notification, failure, decision-pause) and must not
+      re-trigger on its own output.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 85
+    value: |
+      Implement job failure (Claude error, push conflict, quota): auto-retry up to 2 times, resetting
+      the branch to a clean base before each retry (force-push, discard the failed attempt's partial
+      state) rather than trying to resume it; after 2 retries, stop and comment the failure on the
+      issue for manual follow-up. Interview-turn and draft/validation-round failures do not
+      auto-retry: the workflow fails and the user re-triggers by commenting again.
+
+      Separately, a `user_decision_required` finding (not a failure) during validation OR during the
+      implement job's own review flow (code-reviewer/security-auditor) is handled differently from a
+      failure: the job commits whatever work is already done to the branch, posts the question as an
+      issue comment, and stops - not counted against the 2 retries, since retrying cannot resolve a
+      decision question. The user's reply comment resumes the job, which checks out that same branch
+      (partial work already committed) and continues from there instead of redoing finished work.
+
+      Reset-and-restart-clean applies uniformly to every implement-job failure cause (Claude error,
+      push conflict, quota) - no branching by failure type, accepting the extra token cost on a
+      push-conflict retry in exchange for v1 simplicity.
+
+      Finalize job failure uses the same policy as implement: auto-retry up to 2 times, then comment
+      the failure on the issue (finalize has no manual re-trigger command, since its only trigger is
+      an automatic PR-merge event; after exhausting retries the user must investigate and finalize
+      manually).
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 90
+    value: |
+      Exercise all 8 acceptance criteria against one real small demo repo end to end (not unit tests
+      of the bash scripts/YAML): create an issue, answer the interview via comments, approve, watch
+      the implement job open a code PR, force/observe one implement failure to confirm the
+      retry-then-notify path, merge the PR and confirm finalize runs automatically, and open two
+      issues close together to confirm independent parallel runs and serialized finalize. Also
+      create a new project via project-initialization with online-pipeline enabled and confirm the
+      scaffold includes the workflow files and setup instructions (no need to run its full
+      lifecycle). Additionally: confirm `/approve` actually merges the spec PR into main (not just
+      closes it) by checking main after approval; and deliberately trigger a
+      `user_decision_required` finding (during a validation round and during the implement job) to
+      confirm the job posts the question, stops, commits partial work first when mid-implement, and
+      correctly resumes from the user's reply comment. Also confirm: a failure-retry actually
+      force-pushes a clean base (inspect the branch's commit history before/after the retry, not
+      just the retry count/notification) rather than resuming the failed attempt's commits; merging
+      the spec PR does not itself trigger finalize (only the labeled/branched code PR does); a
+      forced finalize-job failure auto-retries and then notifies like implement does; and the bot's
+      own comments never re-trigger a new job run (no self-loop).
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    value: ""
+    gaps: ["Describe UI or UX requirements when applicable"]
+    required: false
+
+  risks:
+    score: 85
+    value: |
+      (a) API/quota cost grows with parallel features and up-to-2 auto-retries per failure.
+      Mitigation: keep retry cap at 2; no cap on parallel feature count by user's choice.
+      (b) `/approve` has no actor check, so if the repo is accidentally made public, anyone could
+      approve. Mitigation: recommend/require the repo stays private; not enforced in-workflow.
+      (c) OAuth subscription auth has a rate/concurrency ceiling that uncapped parallel features can
+      hit. Mitigation: documented as a known v1 limitation; user switches to API key manually if hit,
+      no automatic queuing.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 70
+    value: |
+      Reuse existing user-spec-planning templates/scripts unchanged for the online flow (rejected:
+      building a separate online-only interview data format, because it would require rewriting the
+      interview-completeness-checker/skeptic/userspec-*-validator input contract and would drift
+      from the local CLI flow over time). Support both OAuth subscription token and API key for
+      auth (rejected: hardcoding one, because the user wants to choose per project). New behavior
+      required beyond the existing skill: commit+push interview.yml after every interview turn (not
+      only at draft/validation/approve milestones) to a dedicated branch, because each GitHub
+      Actions run is a fresh checkout with no in-memory session continuity; add a `concurrency:`
+      group per issue to prevent overlapping comment-triggered jobs from clobbering state. No actor
+      check on /approve (accepted risk). Implement job retries up to 2 times on failure, then stops
+      and notifies. Finalize always runs on PR merge without an incompleteness confirmation gate
+      (decision A), since merge already implies human confirmation. `/approve` merges the spec PR
+      into main (not just closes it). A reviewer's `user_decision_required` finding during any
+      validation round is posted as an issue comment and the job stops, resumed by the user's reply
+      comment - the same mechanism as an interview turn. OAuth subscription auth has a known,
+      unhandled rate/concurrency ceiling under heavy parallel feature usage; accepted as a documented
+      limitation for v1 (no queuing), with API key as the user's manual fallback if hit.
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 85
+    value: |
+      Bundle a single `setup-online-pipeline.sh` in the new skill's assets. It automates: copying the
+      workflow YAML into `.github/workflows/` and committing/pushing it, and running
+      `gh secret set CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`) with the value the user
+      pastes in. It prints instructions and pauses at the two non-scriptable manual steps (GitHub
+      App install link, `claude setup-token`/Console).
+    gaps: []
+    required: false
+
+  manual_user_actions:
+    score: 85
+    value: |
+      One-time per repo, cannot be scripted (require the user's own browser auth/consent):
+      (1) install the Claude GitHub App on the repo, (2) generate an OAuth token (`claude
+      setup-token`) or an Anthropic API key. Everything else is scripted (see deploy_approach).
+    gaps: []
+    required: false
+
+integration:
+  integration_points:
+    score: 90
+    value: |
+      New skill lives alongside project-initialization/user-spec-planning in molyanov-ai-dev. It
+      depends on (reuses, does not fork) user-spec-planning's assets/ and scripts/. Trigger set
+      confirmed sufficient: `issues: opened` starts interview, `issue_comment: created` continues
+      interview or carries `/approve`, post-approve job runs `claude -p` non-interactively. Ships
+      both ways: (a) standalone — invokable to enable online mode on an existing project, and
+      (b) wired into project-initialization's scaffold so new projects get it by default.
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 0
+    value: ""
+    gaps: ["Identify relevant existing features, services, or libraries"]
+    required: false
+
+  technical_constraints:
+    score: 0
+    value: ""
+    gaps: ["Resolve applicable performance, security, or platform limits"]
+    required: false
+
+  data_requirements:
+    score: 0
+    value: ""
+    gaps: ["Describe required data, sources, destinations, and persistence"]
+    required: false
+
+  migration_needs:
+    score: 0
+    value: ""
+    gaps: ["Describe migration and compatibility needs when applicable"]
+    required: false
+
+notes: ""
