@@ -250,6 +250,36 @@ conversation_history:
 
       User chose: reset-and-restart uniformly for all failure causes (accepted the extra token cost
       on push-conflict in exchange for simplicity - no failure-type branching in v1).
+  - asked_at: "2026-10-01 03:00:00"
+    topic_keys: ["verification_strategy", "constraints", "error_scenarios"]
+    agent_questions: |
+      [After drafting user-spec.md and running validation round 1 (skeptic clean; adequacy and
+      quality each found issues). Asked:]
+      1. (Critical, quality) The drafted Verification section contradicts itself: the Agent
+         Verification table lists all 12 live-flow steps as if agent-executable, while User
+         Verification says an agent cannot simulate the real multi-day comment flow. Proposed: Agent
+         Verification keeps only static/structural checks (files in place, YAML syntax valid, script
+         runs without error, branch/label names match spec); the full 12-step live run becomes the
+         sole User Verification, not duplicated. Agree?
+      2. (Critical, adequacy - drafting error) The draft wrongly applied "reset branch via
+         force-push on retry" to both implement AND finalize. Finalize commits directly to main (no
+         dedicated branch), so force-pushing main on retry would destroy unrelated concurrent
+         merges from other parallel features. Proposed: remove force-push/reset from finalize
+         entirely - finalize retry just re-runs the job from a fresh checkout; main is never touched
+         until finalize's own final atomic commit, so a failure before that point leaves main
+         unaffected and nothing needs resetting. Agree?
+      3. (Major, adequacy) The decision that finalize always runs (skips documentation-writing's
+         built-in "ask if incomplete" step) has no defined mechanism without either modifying that
+         shared skill or relying on an unverified prompt-level override. Choose: (a) add an explicit
+         non-interactive branch to documentation-writing/SKILL.md's Feature Finalization Mode
+         ("when invoked with no one able to answer, always continue") - transparent and verifiable,
+         but touches a shared skill used elsewhere; or (b) leave documentation-writing untouched and
+         have online-pipeline's finalize job run its own reduced logic instead of the shared skill's
+         actual finalize mode.
+    user_answer: |
+      1 ok
+      2. ok
+      3 a
   - asked_at: "2026-10-01 02:25:00"
     topic_keys: ["integration_points", "error_scenarios", "constraints"]
     agent_questions: |
