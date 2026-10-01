@@ -20,8 +20,10 @@ type: feature
 Một skill mới `online-pipeline` cho framework `molyanov-ai-dev`, cho phép một dự án 1-repo chạy
 toàn bộ vòng đời feature (request → interview → approve → implement → PR → finalize) hoàn toàn qua
 GitHub (issue, comment, PR), không cần mở máy tính hay chạy `claude` CLI local ở bất kỳ bước nào.
-Skill tái dùng nguyên vẹn template/script của `user-spec-planning`, chỉ bổ sung các cơ chế vận hành
-cần cho môi trường GitHub Actions không có trạng thái phiên liên tục giữa các lần chạy.
+Skill tái dùng phần lớn template/script của `user-spec-planning` nguyên vẹn, chỉ bổ sung các cơ
+chế vận hành cần cho môi trường GitHub Actions không có trạng thái phiên liên tục giữa các lần
+chạy — và một sửa đổi nhỏ, có kiểm soát (gated bởi tín hiệu rõ ràng) vào `user-spec-planning` và
+`documentation-writing` để hỗ trợ đúng hành vi tự động.
 
 ## Why
 Hiện tại, methodology của `molyanov-ai-dev` bắt buộc người dùng ngồi máy tính, mở một phiên Claude
@@ -50,7 +52,7 @@ hay không.
      lên issue, dừng — không tính vào 2 lần retry. Người dùng trả lời, bot tiếp tục từ đúng branch đó
      (không làm lại từ đầu).
 6. Người dùng review và merge PR code. Việc merge PR có label `userspec-implement` tự động kích
-   hoạt job finalize, được gọi kèm câu tín hiệu cố định `AUTOMATED_FINALIZE` để bỏ qua bước "hỏi
+   hoạt job finalize, được gọi kèm câu tín hiệu cố định `ONLINE_PIPELINE_AUTOMATED` để bỏ qua bước "hỏi
    tiếp tục nếu thấy thiếu sót": cập nhật Project Knowledge, chuyển `work/{feature}/` sang
    `work/completed/{feature}/`. Finalize commit thẳng vào `main` (không có branch riêng); nếu lỗi
    trước khi tới bước commit cuối cùng, `main` chưa bị đụng tới nên chỉ cần **chạy lại từ đầu**
@@ -96,16 +98,21 @@ hay không.
 ## Constraints
 - Hỗ trợ cả hai cách xác thực: Claude subscription OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`) và
   Anthropic API key (`ANTHROPIC_API_KEY`) — người dùng chọn lúc setup, không cố định cứng.
-- Mọi job gọi `claude -p` phải chạy ở chế độ permission không tương tác, có sẵn danh sách tool
-  được phép đúng theo tên tool thật của Claude Code — `Bash` (để chạy `git`/`gh`), `Read`, `Write`,
-  `Edit`, `Skill`, `Agent` — cùng cách `claude-code-action` của Anthropic đã dùng để chạy headless
-  trong CI. Không cấu hình đủ danh sách này, bất kỳ lệnh ghi file hay chạy shell nào trong job
-  (interview commit, implement code-writing, finalize archive) đều sẽ treo chờ xác nhận mà không
-  ai trả lời được.
-- Tái dùng nguyên vẹn `assets/user-spec.md.template`, `assets/interview.yml.template`,
-  `assets/decisions.md.template`, `scripts/init-feature-folder.sh` của `user-spec-planning`, không
-  tạo định dạng riêng, để các reviewer agent (`skeptic`, `userspec-quality-validator`,
-  `userspec-adequacy-validator`, `interview-completeness-checker`) hoạt động không đổi.
+- Mọi job gọi `claude -p` (interview, draft/validate, implement, finalize) phải chạy ở chế độ
+  **bypass permissions hoàn toàn** (`--dangerously-skip-permissions`, tương đương
+  `permissions.defaultMode: bypassPermissions`) — thay vì liệt kê tên tool được phép, vì tên tool
+  chính xác (vd `Skill`, `Agent` hay `Task`) có thể khác nhau giữa các phiên bản Claude Code CLI và
+  đoán sai sẽ tái diễn đúng lỗi "treo chờ xác nhận". Đánh đổi: bypass mode không có lớp bảo vệ khỏi
+  prompt injection hay hành động ngoài ý muốn — chấp nhận được vì mỗi job chạy trên runner GitHub
+  Actions dùng 1 lần rồi huỷ, trên repo private, không có dữ liệu không tin cậy nào khác trong
+  workspace đó.
+- Tái dùng `assets/user-spec.md.template`, `assets/decisions.md.template`,
+  `scripts/init-feature-folder.sh` của `user-spec-planning` nguyên vẹn, không tạo định dạng riêng,
+  để các reviewer agent (`skeptic`, `userspec-quality-validator`, `userspec-adequacy-validator`,
+  `interview-completeness-checker`) hoạt động không đổi. Riêng `assets/interview.yml.template` và
+  `skills/user-spec-planning/SKILL.md` có một ngoại lệ đã thống nhất: thêm field mới lưu trạng thái
+  vòng validate (xem chi tiết ở phần Accepted Decisions) — chỉ kích hoạt khi có tín hiệu
+  `ONLINE_PIPELINE_AUTOMATED`, không đổi hành vi/format khi dùng local.
 - Mỗi lượt interview phải commit+push `interview.yml` lên branch riêng (`userspec/{slug}`) ngay sau
   lượt đó — vì mỗi lần GitHub Actions chạy là một checkout hoàn toàn mới, không có trạng thái phiên
   giữa các lần chạy (đã xác nhận qua tài liệu `claude-code-action`: "continuing conversations" chưa
@@ -132,18 +139,26 @@ hay không.
   kiểm tra `work/{feature}/` đã chuyển sang `work/completed/{feature}/` trên main chưa — nếu rồi
   (nghĩa là lần chạy trước thực ra đã thành công, chỉ lỗi sau khi commit/push xong), coi như đã
   hoàn tất và dừng, không chạy lại.
-- Khi online-pipeline gọi `claude -p` để chạy finalize, lệnh gọi luôn kèm một câu tín hiệu cố định
-  (vd `AUTOMATED_FINALIZE: không có ai trả lời, luôn tiếp tục, không hỏi lại`) — nhánh tự động mới
-  trong `documentation-writing/SKILL.md` chỉ bỏ qua bước hỏi khi nhận diện đúng câu tín hiệu này,
-  không tự suy luận "có phải đang chạy tự động hay không". Lúc chạy tương tác (local) không có câu
-  tín hiệu này, nên hành vi hỏi-nếu-thiếu-sót giữ nguyên như cũ.
-- Interview-turn và draft/validate-round khi gặp lỗi kỹ thuật **không** auto-retry — job fail thẳng,
-  người dùng tự re-trigger bằng cách comment lại (vì mỗi lượt đã sẵn comment-triggered).
+- Dùng **một tín hiệu cố định chung** cho mọi lệnh gọi `claude -p` trong ngữ cảnh tự động, không có
+  người trả lời: `ONLINE_PIPELINE_AUTOMATED`. Cả 2 skill dùng chung (`documentation-writing` cho
+  finalize, `user-spec-planning` cho validate) chỉ bật nhánh hành vi tự động khi nhận diện đúng
+  literal chuỗi này trong lệnh gọi, không tự suy luận "có phải đang chạy tự động hay không". Lúc
+  chạy tương tác (local, không có tín hiệu này), hành vi của cả 2 skill giữ nguyên như cũ.
+- Scope bao gồm thêm một sửa đổi nhỏ vào `skills/user-spec-planning/SKILL.md` (Step 3 "Check
+  Interview Completeness" và Step 5 "Validate the User Spec"): khi nhận diện tín hiệu
+  `ONLINE_PIPELINE_AUTOMATED` và một reviewer phát hiện `user_decision_required`, trước khi comment
+  hỏi và dừng, lưu lại vòng validate hiện tại + finding đang chờ vào `interview.yml` (field mới,
+  không có trong template gốc); lần chạy sau đọc field đó để **tiếp tục đúng vòng đang dở** thay vì
+  validate lại từ vòng 1 như hành vi mặc định hiện có của skill này. Hành vi tương tác (local) giữ
+  nguyên không đổi — "khôi phục đúng vòng" chỉ áp dụng khi có tín hiệu tự động.
+- Interview-turn và draft/validate-round khi gặp **lỗi kỹ thuật** **không** auto-retry — job fail
+  thẳng, người dùng tự re-trigger bằng cách comment lại (vì mỗi lượt đã sẵn comment-triggered).
 - Một finding `user_decision_required` (không phải lỗi kỹ thuật) được xử lý khác với lỗi, ở cả 2
   nơi có thể xảy ra: lúc validate (vốn không có auto-retry nào cả — chỉ đơn giản comment hỏi và
-  dừng, tiếp tục đúng vòng đó khi có trả lời) và lúc implement (có auto-retry cho lỗi kỹ thuật, nên
-  cần nói rõ: bot commit phần đã làm xong, comment câu hỏi, dừng — không tính vào 2 lần retry dành
-  cho lỗi kỹ thuật của implement, tiếp tục từ branch đã commit khi người dùng trả lời).
+  dừng, rồi tiếp tục đúng vòng đang dở nhờ field mới nói trên) và lúc implement (có auto-retry cho
+  lỗi kỹ thuật, nên cần nói rõ: bot commit phần đã làm xong, comment câu hỏi, dừng — không tính vào
+  2 lần retry dành cho lỗi kỹ thuật của implement, tiếp tục từ branch đã commit khi người dùng trả
+  lời).
 - Mỗi feature chạy trên concurrency group riêng theo số issue (song song không giới hạn số lượng);
   mọi job finalize chia sẻ một concurrency group cố định để chạy tuần tự khi trùng thời điểm.
   Concurrency group theo issue dùng chế độ **chờ** (`cancel-in-progress: false`), không hủy job
@@ -170,6 +185,9 @@ hay không.
 - **Risk 3:** Dùng OAuth subscription cho nhiều feature song song có thể chạm trần rate/concurrency
   của Anthropic. **Mitigation:** Ghi nhận là giới hạn đã biết của v1; người dùng tự chuyển sang API
   key nếu gặp giới hạn, không có cơ chế queue tự động.
+- **Risk 4:** Chạy mọi job ở chế độ bypass permissions mất lớp bảo vệ khỏi prompt injection hoặc
+  hành động ngoài ý muốn trong job đó. **Mitigation:** Mỗi job chạy trên runner GitHub Actions dùng
+  1 lần rồi huỷ, trên repo private, không xử lý dữ liệu/code không tin cậy từ bên ngoài.
 
 ## Accepted Decisions
 - Chọn tái dùng nguyên vẹn template/script của `user-spec-planning` thay vì tạo định dạng riêng cho
@@ -209,15 +227,27 @@ hay không.
 - Sửa lại (sau validate round 2 — phát hiện rủi ro suy luận sai): nhánh tự động trong
   `documentation-writing` không dựa vào việc model tự suy luận "đây có phải ngữ cảnh tự động
   không", vì nếu suy luận sai sẽ rơi lại đúng tình trạng treo máy mà bản sửa này muốn tránh. Thay
-  vào đó dùng một câu tín hiệu cố định, rõ ràng (`AUTOMATED_FINALIZE`) mà online-pipeline luôn kèm
-  theo khi gọi finalize tự động — giống bật/tắt một cờ (flag), không mơ hồ.
+  vào đó dùng một câu tín hiệu cố định, rõ ràng (`ONLINE_PIPELINE_AUTOMATED`) mà online-pipeline
+  luôn kèm theo khi gọi tự động — giống bật/tắt một cờ (flag), không mơ hồ.
+- Sửa lại (sau validate round 4 — phát hiện mâu thuẫn với hành vi thật của `user-spec-planning`):
+  lời hứa "tiếp tục đúng vòng validate đang dở" không thể đạt được nếu chỉ tái dùng
+  `user-spec-planning/SKILL.md` nguyên vẹn, vì chính skill đó quy định một phiên mới sau khi bị
+  dừng sẽ validate lại từ vòng 1, không khôi phục phản hồi reviewer cũ — mà mỗi lần GitHub Actions
+  chạy luôn là một phiên mới. Giữa 2 hướng (chấp nhận chạy lại từ vòng 1 — giữ "tái dùng nguyên
+  vẹn", hay sửa thêm `user-spec-planning` để lưu/khôi phục đúng vòng — giữ đúng lời hứa ban đầu),
+  người dùng chọn **sửa thêm `user-spec-planning`**, dùng chung tín hiệu `ONLINE_PIPELINE_AUTOMATED`
+  với nhánh tự động của `documentation-writing` thay vì tạo 2 tín hiệu riêng cho cùng một khái niệm
+  ("được gọi tự động, không ai trả lời").
 - Thêm cơ chế idempotency cho finalize retry (sau validate round 2): trước khi retry, job tự kiểm
   tra `work/{feature}/` đã archive xong trên main chưa; nếu rồi thì dừng, không chạy lại — tránh
   trường hợp lỗi xảy ra *sau* khi commit/push đã thành công (job chỉ lỗi lúc đang thoát) khiến retry
   chạy nhầm trên trạng thái đã hoàn tất.
 - Thêm yêu cầu permission mode không tương tác cho mọi job `claude -p` (sau validate round 2): nếu
-  không cấu hình trước danh sách tool được phép, job có thể treo chờ xác nhận mà không ai trả lời
-  được trong môi trường tự động.
+  không cấu hình, job có thể treo chờ xác nhận mà không ai trả lời được trong môi trường tự động.
+- Sửa lại (sau validate round 4 — phát hiện rủi ro đoán sai tên tool): dùng **bypass permissions
+  hoàn toàn** cho mỗi job, thay vì liệt kê tên tool cụ thể (vì tên tool thật có thể đã đổi/khác
+  phiên bản CLI, đoán sai sẽ tái diễn đúng lỗi treo máy). Đánh đổi mất lớp bảo vệ injection, chấp
+  nhận vì mỗi job chạy trên runner dùng 1 lần, repo private.
 - Concurrency theo issue dùng chế độ chờ (`cancel-in-progress: false`), không hủy job đang chạy
   (sau validate round 2): tránh 2 comment chồng lên cùng issue làm ngắt job đang commit
   `interview.yml` giữa chừng, có thể làm hỏng file đó.
@@ -251,11 +281,14 @@ hay không.
 |------|-----------------|
 | 1. Chạy `setup-online-pipeline.sh` trên một repo demo nhỏ (không cần GitHub App/token thật) | Workflow YAML được copy đúng vào `.github/workflows/`, cú pháp YAML hợp lệ (lint), `gh secret set` được gọi đúng cú pháp, script in ra đúng 2 bước thủ công còn lại (cài GitHub App, tạo token) |
 | 2. Đọc lại các workflow file đã sinh ra | Tên branch/label dùng đúng theo spec (`userspec/{slug}`+`userspec-spec`, `feature/{slug}`+`userspec-implement`); mọi job nghe `issue_comment` có điều kiện lọc tác giả bot |
-| 3. Kiểm tra sửa đổi trong `documentation-writing/SKILL.md` | Nhánh tự động mới không đổi hành vi nhánh tương tác hiện có; nhánh mới nhận diện đúng literal `AUTOMATED_FINALIZE` |
+| 3. Kiểm tra sửa đổi trong `documentation-writing/SKILL.md` | Nhánh tự động mới không đổi hành vi nhánh tương tác hiện có; nhánh mới nhận diện đúng literal tín hiệu `ONLINE_PIPELINE_AUTOMATED` |
 | 4. Tạo project mới qua `project-initialization` với online-pipeline được bật | Scaffold project mới có đủ file workflow + hướng dẫn setup (kiểm tra tĩnh, không chạy vòng đời thật) |
-| 5. Đọc workflow file của job implement/finalize | Có khai báo permission mode không tương tác với đủ tool allowlist (`Bash`, `Read`, `Write`, `Edit`, `Skill`, `Agent`) |
+| 5. Đọc workflow file của **cả 4 loại job** (interview, draft/validate, implement, finalize) | Mỗi loại job đều khai báo chế độ bypass permissions hoàn toàn (`--dangerously-skip-permissions` hoặc tương đương), không riêng implement/finalize |
 | 6. Đọc khối `concurrency:` của workflow theo issue | Có `cancel-in-progress: false` (không phải mặc định hủy job) |
-| 7. Đọc prompt/script gọi finalize | Có chứa đúng literal chuỗi tín hiệu `AUTOMATED_FINALIZE` được truyền vào lệnh gọi `claude -p` |
+| 7. Đọc prompt/script gọi finalize | Có chứa đúng literal tín hiệu `ONLINE_PIPELINE_AUTOMATED` được truyền vào lệnh gọi `claude -p` |
+| 8. Đọc workflow file của job implement/finalize/draft-validate | Không có cấu hình retry nào gắn vào job interview-turn hoặc draft/validate-round (chỉ implement và finalize mới có retry) |
+| 9. Đọc workflow file | Có branch rõ ràng cho cả 2 secret `CLAUDE_CODE_OAUTH_TOKEN` và `ANTHROPIC_API_KEY` khi gọi `claude -p`, không hardcode chỉ 1 trong 2 |
+| 10. Kiểm tra sửa đổi trong `user-spec-planning/SKILL.md` và template `interview.yml`/`decisions.md` | Có nhánh mới nhận diện literal tín hiệu `ONLINE_PIPELINE_AUTOMATED`, có field lưu vòng validate đang dở + finding đang chờ quyết định |
 
 Agent chỉ kiểm tra được các mục tĩnh trên (file đúng chỗ, cú pháp hợp lệ, cấu hình đúng tên). Agent
 không thể tự tạo issue GitHub thật, chờ nhiều ngày, hay tự trả lời comment hộ người dùng — nên toàn
@@ -276,9 +309,13 @@ thật, không thể mô phỏng bằng agent chạy một lần.
    `feature/{slug}` bị force-push reset sạch (kiểm tra lịch sử commit trước/sau retry).
 6. Cố ý làm job implement lỗi liên tiếp đủ 2 lần → sau lần retry thứ 2 vẫn lỗi, job dừng hẳn (không
    retry lần 3) và comment báo lỗi lên issue.
-7. Cố ý tạo tình huống reviewer cần quyết định (lúc validate và lúc implement) → bot commit phần đã
-   làm xong (nếu đang implement), comment câu hỏi lên issue, job dừng; trả lời comment → job tiếp
-   tục đúng từ branch đó, không tính vào số lần retry.
+7. Cố ý tạo tình huống reviewer cần quyết định **lúc implement** → bot commit phần đã làm xong,
+   comment câu hỏi lên issue, job dừng; trả lời comment → job tiếp tục đúng từ branch đó, không
+   tính vào số lần retry.
+7b. Cố ý tạo tình huống reviewer cần quyết định **lúc validate ở vòng 2 hoặc 3** → bot comment câu
+    hỏi lên issue, job dừng; trả lời comment → job tiếp tục đúng **vòng validate đang dở** (vòng 2
+    hoặc 3), không chạy lại từ vòng 1 — xác nhận bằng cách kiểm tra log: không có lệnh gọi lại 2
+    reviewer đã xong ở vòng trước.
 8. Merge PR code → job finalize tự chạy: Project Knowledge được cập nhật, `work/{feature}/` chuyển
    sang `work/completed/{feature}/`, không có commit nào reset `main`.
 9. Xác nhận việc merge PR spec ở bước 3 không kích hoạt finalize — chỉ bước 8 mới kích hoạt.
@@ -294,5 +331,10 @@ thật, không thể mô phỏng bằng agent chạy một lần.
     comment do chính bot tạo ra; mọi job `claude -p` chạy xong không bị treo chờ xác nhận tool nào.
 15. Dùng một feature demo mà `documentation-writing` sẽ đánh giá là "chưa hoàn chỉnh" (vd cố ý chỉ
     implement một phần user-spec trước khi merge) rồi merge PR code → finalize vẫn chạy thẳng, không
-    hỏi lại xác nhận, vì nhận diện đúng tín hiệu `AUTOMATED_FINALIZE` — xác nhận nhánh tự động mới
-    thực sự chặn được bước "hỏi tiếp tục" chứ không chỉ lý thuyết.
+    hỏi lại xác nhận, vì nhận diện đúng tín hiệu `ONLINE_PIPELINE_AUTOMATED` — xác nhận nhánh tự động
+    mới thực sự chặn được bước "hỏi tiếp tục" chứ không chỉ lý thuyết.
+16. Cố ý làm lỗi kỹ thuật ở một lượt interview hoặc một vòng validate (vd ngắt job giữa chừng) → job
+    đó fail thẳng, không tự retry; comment lại trên issue → job chạy lại bình thường từ comment mới.
+17. Chạy toàn bộ vòng đời một lần với secret là `CLAUDE_CODE_OAUTH_TOKEN` (OAuth) và một lần khác
+    (hoặc 1 repo demo khác) với secret là `ANTHROPIC_API_KEY` → cả hai đường xác thực đều chạy được
+    hết vòng đời, không chỉ đường thuận tiện hơn (OAuth) được thử.

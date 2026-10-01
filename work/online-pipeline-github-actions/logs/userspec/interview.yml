@@ -312,6 +312,43 @@ conversation_history:
       2. ok
       3. ko hiểu lắm. [agent explained with a concrete flag-on/flag-off analogy] oke
       4. ok
+  - asked_at: "2026-10-01 04:10:00"
+    topic_keys: ["constraints", "error_scenarios", "technical_decisions"]
+    agent_questions: |
+      [Validation round 4 found 2 more issues after round 3 fixes. Asked:]
+      1. (Major, skeptic) The tool allowlist (Bash/Read/Write/Edit/Skill/Agent) added in round 3 is
+         itself unverified - "Skill"/"Agent" may not be claude-code-action's actual literal
+         --allowedTools token names (possible version-dependent naming, e.g. "Task" instead of
+         "Agent"). Verified via WebSearch that Claude Code's documented alternative is running the
+         whole job in bypassPermissions mode (--dangerously-skip-permissions) instead of enumerating
+         tool names - the standard pattern for sandboxed CI, removing the naming-guess risk entirely.
+         Gave a pros/cons table (bypass loses the injection/unintended-action safety net but matches
+         disposable-runner CI practice; explicit allowlist is safer in principle but the exact names
+         are unverified and could reproduce the same hang bug if wrong). Agree to switch to bypass
+         permissions mode for every pipeline job?
+      2. (Major, adequacy) The spec promises that a user_decision_required pause mid-validation
+         resumes at the exact validation round later. But user-spec-planning/SKILL.md - reused
+         unchanged per this spec's own constraint - explicitly documents that a later run after a
+         session ends restarts validation from round 1, with no round-state persisted anywhere
+         (interview.yml/decisions.md templates have no such field). Since every GitHub Actions run
+         is a fresh session, any decision-pause mid-validation is exactly this restart-from-round-1
+         scenario in the actual reused skill, contradicting the promised exact-round resume. Gave a
+         pros/cons table for: (a) add a scoped modification to user-spec-planning/SKILL.md too (like
+         documentation-writing's AUTOMATED_FINALIZE change) to persist/restore round state - keeps
+         the original promise but extends scope to a second shared skill; vs (b) accept restart-
+         from-round-1 (matches the skill's existing local behavior when a session is interrupted;
+         no second shared-skill modification; costs extra reviewer token spend on restart). Agent
+         recommended (b) for consistency with the "reuse unchanged" principle, but left the choice
+         to the user.
+    user_answer: |
+      1. by pass
+      2. a đi.
+
+      [User chose option (a) over the agent's (b) recommendation - explicitly extending scope to
+      modify user-spec-planning/SKILL.md as well, using one shared deterministic signal phrase
+      (ONLINE_PIPELINE_AUTOMATED) across both documentation-writing's finalize-ask-skip branch and
+      user-spec-planning's new validation-round persist/resume branch, to avoid two different signal
+      conventions for the same underlying concept ("invoked where no one can answer").]
   - asked_at: "2026-10-01 02:25:00"
     topic_keys: ["integration_points", "error_scenarios", "constraints"]
     agent_questions: |
