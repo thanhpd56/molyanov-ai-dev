@@ -164,7 +164,11 @@ Do not search for `user-spec.md` or require it outside feature-finalization mode
 1. Read `user-spec.md`, `decisions.md` when present, the implementation, and the relevant Git
    history. Compare the implemented result with the agreed spec.
 2. If the feature is evidently incomplete, explain the concrete gap and ask whether to continue
-   finalization.
+   finalization. When the calling context includes the literal signal
+   `ONLINE_PIPELINE_AUTOMATED`, skip this question — no one is present to answer it, and the merge
+   that triggered this run is already the user's confirmation. Note the gap in the finalization
+   commit message instead, and continue finalization. Without that literal signal, keep asking as
+   above.
 3. Update only affected Project Knowledge through Phases 2-3 and Documentation Review. If Project
    Knowledge is missing, report that the documentation update was skipped and continue archival
    and finalization.
