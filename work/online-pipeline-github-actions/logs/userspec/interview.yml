@@ -363,6 +363,37 @@ conversation_history:
          practice, no real trade-off. Agree?
     user_answer: |
       ok
+  - asked_at: "2026-10-01 05:30:00"
+    topic_keys: ["constraints", "error_scenarios", "technical_decisions"]
+    agent_questions: |
+      [Validation round 5 found 3 issues across skeptic/adequacy/quality. Asked:]
+      1. (Skeptic, factual) user-spec-planning's Step 3 "Check Interview Completeness" has no round
+         concept at all (single-pass loop, already persists via the existing interview-turn commit
+         mechanism) - only Step 5 "Validate the User Spec" has the round-restart-from-1 defect.
+         Scope the modification to Step 5 only, drop Step 3. (Applied directly, factual correction.)
+      2. (Adequacy, critical) The round-state persistence fix only persisted round number + pending
+         finding identity, not the round's in-progress uncommitted document edits from OTHER
+         reviewers in that same interrupted round (Step 5 commits once per whole round, not per
+         finding) - so those edits would still be lost on a fresh-checkout resume, reproducing the
+         root problem. Proposed: simplify - persist only the round number + the user's answer to the
+         pending decision; resume by re-running the FULL current round (all 3 reviewers) fresh with
+         the decision now answered, rather than trying to preserve partial in-round state. Cheaper
+         than restarting from round 1, but doesn't try to avoid re-calling the 2 reviewers that had
+         already passed in that interrupted round. Agree?
+      3. (Adequacy, major) Two implement-job policies could collide: a resolved decision-pause commit
+         followed later by a genuine technical failure - does "reset to clean base" wipe the
+         decision-pause commit (forcing the user to re-answer) or preserve it? Proposed: "reset to
+         clean base" means reset to the branch's most recent commit (discarding only the failed
+         attempt's uncommitted/dirty state), not the branch's initial commit - preserving any
+         legitimately committed checkpoint, including a decision-pause answer. Agree?
+      4. (Quality, critical - own drafting error) Verification step 10 required checking
+         decisions.md.template for the new round-state field, contradicting Constraints which
+         explicitly keeps decisions.md.template unchanged. Remove decisions.md from step 10.
+      5. (Quality, major - no decision needed) Verification step 8's action column omits reading the
+         interview-turn job's workflow file even though its expected result claims to verify that
+         file has no retry config. Add it to the action column.
+    user_answer: |
+      ok (confirmed proposals 2 and 3; 1, 4, 5 applied directly as factual/editorial fixes)
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]

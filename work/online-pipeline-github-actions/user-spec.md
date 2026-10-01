@@ -72,10 +72,13 @@ hay không.
       bắt đầu.
 - [ ] Job implement thành công → PR code (label `userspec-implement`) xuất hiện trong cùng repo.
 - [ ] Job implement thất bại do lỗi kỹ thuật → tự động retry tối đa 2 lần, mỗi lần **reset branch về
-      sạch** (force-push) trước khi làm lại; vẫn lỗi sau 2 lần → comment báo lỗi lên issue và dừng.
+      commit gần nhất đã lưu** (force-push) — không phải về điểm khởi tạo branch, nên không xoá mất
+      checkpoint từ một lượt dừng-hỏi-quyết-định trước đó; vẫn lỗi sau 2 lần → comment báo lỗi lên
+      issue và dừng.
 - [ ] Trong lúc validate spec, nếu reviewer cần người dùng quyết định → bot comment câu hỏi lên
-      issue, dừng (validate vốn không có cơ chế auto-retry nên không có gì để "không tính vào");
-      trả lời bằng comment → bot tiếp tục đúng vòng validate đó.
+      issue, lưu lại số vòng đang validate + câu hỏi, dừng (validate vốn không có cơ chế auto-retry
+      nên không có gì để "không tính vào"); trả lời bằng comment → bot **chạy lại toàn bộ đúng vòng
+      đó** (gọi lại cả 3 reviewer của vòng đó, không phải vòng 1), lần này có câu trả lời.
 - [ ] Trong lúc implement, nếu review (`code-reviewer`/`security-auditor`) cần người dùng quyết
       định → bot commit phần đã làm xong, comment câu hỏi lên issue, dừng — **không** tính vào 2
       lần retry dành cho lỗi kỹ thuật của implement; trả lời bằng comment → bot tiếp tục đúng từ
@@ -110,9 +113,12 @@ hay không.
   `scripts/init-feature-folder.sh` của `user-spec-planning` nguyên vẹn, không tạo định dạng riêng,
   để các reviewer agent (`skeptic`, `userspec-quality-validator`, `userspec-adequacy-validator`,
   `interview-completeness-checker`) hoạt động không đổi. Riêng `assets/interview.yml.template` và
-  `skills/user-spec-planning/SKILL.md` có một ngoại lệ đã thống nhất: thêm field mới lưu trạng thái
-  vòng validate (xem chi tiết ở phần Accepted Decisions) — chỉ kích hoạt khi có tín hiệu
-  `ONLINE_PIPELINE_AUTOMATED`, không đổi hành vi/format khi dùng local.
+  **Step 5 "Validate the User Spec"** của `skills/user-spec-planning/SKILL.md` có một ngoại lệ đã
+  thống nhất: thêm field mới lưu trạng thái vòng validate (xem chi tiết ở phần Accepted Decisions)
+  — chỉ kích hoạt khi có tín hiệu `ONLINE_PIPELINE_AUTOMATED`, không đổi hành vi/format khi dùng
+  local. **Step 3 "Check Interview Completeness"** không cần sửa — nó chạy 1 lượt duy nhất, không
+  có khái niệm "vòng", và đã tự lưu trạng thái qua đúng cơ chế commit-mỗi-lượt sẵn có.
+  `decisions.md.template` không đổi.
 - Mỗi lượt interview phải commit+push `interview.yml` lên branch riêng (`userspec/{slug}`) ngay sau
   lượt đó — vì mỗi lần GitHub Actions chạy là một checkout hoàn toàn mới, không có trạng thái phiên
   giữa các lần chạy (đã xác nhận qua tài liệu `claude-code-action`: "continuing conversations" chưa
@@ -127,11 +133,14 @@ hay không.
   label `userspec-implement`) phải phân biệt được bằng label/branch, vì cả hai đều merge vào main
   qua cùng loại sự kiện (`pull_request: closed`, `merged=true`) — job finalize chỉ trigger theo
   label/branch của PR code.
-- Job implement auto-retry tối đa 2 lần khi gặp lỗi kỹ thuật, **reset branch riêng về sạch
-  (force-push) trước mỗi lần retry** — vì implement ghi vào branch riêng `feature/{slug}`, reset
-  branch đó không ảnh hưởng gì khác. Áp dụng đồng nhất cho mọi nguyên nhân lỗi (Claude error, push
-  conflict, hết quota), không phân nhánh theo loại lỗi (đánh đổi: tốn thêm token khi lỗi do push
-  conflict, đổi lại đơn giản hơn trong v1).
+- Job implement auto-retry tối đa 2 lần khi gặp lỗi kỹ thuật, **reset branch riêng về commit gần
+  nhất đã lưu trên branch đó (force-push)** trước mỗi lần retry — không phải reset về điểm khởi tạo
+  branch. "Commit gần nhất" có thể là điểm bắt đầu implement (nếu chưa có gì được commit) hoặc một
+  checkpoint đã commit từ một lượt dừng-hỏi-quyết-định trước đó trong cùng job (xem mục dưới) —
+  cách này chỉ xoá đúng phần dở/hỏng do lỗi gây ra, không xoá mất quyết định người dùng đã trả lời
+  trước đó. Áp dụng đồng nhất cho mọi nguyên nhân lỗi (Claude error, push conflict, hết quota),
+  không phân nhánh theo loại lỗi (đánh đổi: tốn thêm token khi lỗi do push conflict, đổi lại đơn
+  giản hơn trong v1).
 - Job finalize auto-retry tối đa 2 lần khi gặp lỗi kỹ thuật, nhưng **không** force-push/reset gì —
   vì finalize commit thẳng vào `main` (không có branch riêng); force-push `main` sẽ xoá mất commit
   hợp lệ của feature khác đang chạy song song. Một lỗi trước bước commit cuối cùng không để lại dấu
@@ -144,13 +153,17 @@ hay không.
   finalize, `user-spec-planning` cho validate) chỉ bật nhánh hành vi tự động khi nhận diện đúng
   literal chuỗi này trong lệnh gọi, không tự suy luận "có phải đang chạy tự động hay không". Lúc
   chạy tương tác (local, không có tín hiệu này), hành vi của cả 2 skill giữ nguyên như cũ.
-- Scope bao gồm thêm một sửa đổi nhỏ vào `skills/user-spec-planning/SKILL.md` (Step 3 "Check
-  Interview Completeness" và Step 5 "Validate the User Spec"): khi nhận diện tín hiệu
-  `ONLINE_PIPELINE_AUTOMATED` và một reviewer phát hiện `user_decision_required`, trước khi comment
-  hỏi và dừng, lưu lại vòng validate hiện tại + finding đang chờ vào `interview.yml` (field mới,
-  không có trong template gốc); lần chạy sau đọc field đó để **tiếp tục đúng vòng đang dở** thay vì
-  validate lại từ vòng 1 như hành vi mặc định hiện có của skill này. Hành vi tương tác (local) giữ
-  nguyên không đổi — "khôi phục đúng vòng" chỉ áp dụng khi có tín hiệu tự động.
+- Scope bao gồm thêm một sửa đổi nhỏ vào `skills/user-spec-planning/SKILL.md` **Step 5 "Validate
+  the User Spec"** (không đụng Step 3): khi nhận diện tín hiệu `ONLINE_PIPELINE_AUTOMATED` và một
+  reviewer phát hiện `user_decision_required`, trước khi comment hỏi và dừng, lưu lại **số vòng
+  validate hiện tại** (vd vòng 2) + **finding đang chờ** vào `interview.yml` (field mới, không có
+  trong template gốc) — không cố lưu lại các sửa dở/chưa commit của 2 reviewer khác trong cùng
+  vòng đó, vì `user-spec-planning` chỉ commit 1 lần sau khi cả vòng xong, không commit riêng từng
+  finding. Lần chạy sau, khi người dùng đã trả lời, job đọc field đó và **chạy lại toàn bộ đúng
+  vòng N đang dở** (gọi lại đủ cả 3 reviewer của vòng N, lần này có câu trả lời) — không chạy lại
+  từ vòng 1, nhưng cũng không cố "nhớ" phần việc dở của 2 reviewer đã qua trong vòng đó; rẻ hơn
+  restart-từ-vòng-1 nhưng đơn giản hơn so với cố giữ trạng thái chưa commit. Hành vi tương tác
+  (local) giữ nguyên không đổi — cơ chế này chỉ áp dụng khi có tín hiệu tự động.
 - Interview-turn và draft/validate-round khi gặp **lỗi kỹ thuật** **không** auto-retry — job fail
   thẳng, người dùng tự re-trigger bằng cách comment lại (vì mỗi lượt đã sẵn comment-triggered).
 - Một finding `user_decision_required` (không phải lỗi kỹ thuật) được xử lý khác với lỗi, ở cả 2
@@ -260,6 +273,17 @@ hay không.
   là một hạn chế đã biết của v1, không xây cơ chế queue tự động.
 - Chọn tiêu chí "xong" là chạy thử toàn bộ vòng đời trên một repo demo nhỏ thật, không viết unit test
   cho các bash script/workflow YAML.
+- Sửa lại (sau validate round 5 — phát hiện của skeptic): chỉ sửa **Step 5** của
+  `user-spec-planning/SKILL.md`, không đụng Step 3 — Step 3 chạy 1 lượt duy nhất, không có khái
+  niệm "vòng" nên không có gì bị mất khi phiên kết thúc; `decisions.md.template` không đổi.
+- Sửa lại (sau validate round 5 — phát hiện của adequacy): đơn giản hoá cơ chế "tiếp tục đúng vòng"
+  — chỉ lưu số vòng + câu trả lời của người dùng, không cố lưu các sửa chưa commit của reviewer
+  khác trong cùng vòng (vì `user-spec-planning` chỉ commit 1 lần/vòng, không commit riêng từng
+  finding). Khi resume, chạy lại **toàn bộ vòng đang dở** (không phải vòng 1) với câu trả lời đã có
+  — rẻ hơn restart-từ-vòng-1, đơn giản hơn so với cố giữ trạng thái chưa commit.
+- Sửa lại (sau validate round 5 — phát hiện của adequacy): "reset về sạch" khi implement lỗi nghĩa
+  là reset về **commit gần nhất trên branch**, không phải điểm khởi tạo branch — để không xoá mất
+  một quyết định người dùng đã trả lời và được commit trước đó trong cùng job.
 
 ## Testing
 
@@ -286,9 +310,9 @@ hay không.
 | 5. Đọc workflow file của **cả 4 loại job** (interview, draft/validate, implement, finalize) | Mỗi loại job đều khai báo chế độ bypass permissions hoàn toàn (`--dangerously-skip-permissions` hoặc tương đương), không riêng implement/finalize |
 | 6. Đọc khối `concurrency:` của workflow theo issue | Có `cancel-in-progress: false` (không phải mặc định hủy job) |
 | 7. Đọc prompt/script gọi finalize | Có chứa đúng literal tín hiệu `ONLINE_PIPELINE_AUTOMATED` được truyền vào lệnh gọi `claude -p` |
-| 8. Đọc workflow file của job implement/finalize/draft-validate | Không có cấu hình retry nào gắn vào job interview-turn hoặc draft/validate-round (chỉ implement và finalize mới có retry) |
+| 8. Đọc workflow file của **cả 4 loại job** (interview-turn, draft/validate, implement, finalize) | Không có cấu hình retry nào gắn vào job interview-turn hoặc draft/validate-round (chỉ implement và finalize mới có retry) |
 | 9. Đọc workflow file | Có branch rõ ràng cho cả 2 secret `CLAUDE_CODE_OAUTH_TOKEN` và `ANTHROPIC_API_KEY` khi gọi `claude -p`, không hardcode chỉ 1 trong 2 |
-| 10. Kiểm tra sửa đổi trong `user-spec-planning/SKILL.md` và template `interview.yml`/`decisions.md` | Có nhánh mới nhận diện literal tín hiệu `ONLINE_PIPELINE_AUTOMATED`, có field lưu vòng validate đang dở + finding đang chờ quyết định |
+| 10. Kiểm tra sửa đổi trong `user-spec-planning/SKILL.md` Step 5 và template `interview.yml` | Có nhánh mới nhận diện literal tín hiệu `ONLINE_PIPELINE_AUTOMATED`, có field lưu số vòng validate đang dở + finding đang chờ quyết định; Step 3 và `decisions.md.template` không bị đổi |
 
 Agent chỉ kiểm tra được các mục tĩnh trên (file đúng chỗ, cú pháp hợp lệ, cấu hình đúng tên). Agent
 không thể tự tạo issue GitHub thật, chờ nhiều ngày, hay tự trả lời comment hộ người dùng — nên toàn
@@ -313,9 +337,12 @@ thật, không thể mô phỏng bằng agent chạy một lần.
    comment câu hỏi lên issue, job dừng; trả lời comment → job tiếp tục đúng từ branch đó, không
    tính vào số lần retry.
 7b. Cố ý tạo tình huống reviewer cần quyết định **lúc validate ở vòng 2 hoặc 3** → bot comment câu
-    hỏi lên issue, job dừng; trả lời comment → job tiếp tục đúng **vòng validate đang dở** (vòng 2
-    hoặc 3), không chạy lại từ vòng 1 — xác nhận bằng cách kiểm tra log: không có lệnh gọi lại 2
-    reviewer đã xong ở vòng trước.
+    hỏi lên issue, job dừng; trả lời comment → job **chạy lại toàn bộ đúng vòng đang dở** (vòng 2
+    hoặc 3, gọi lại cả 3 reviewer của vòng đó), không chạy lại từ vòng 1 — xác nhận bằng cách kiểm
+    tra log: không có lệnh gọi lại của vòng 1 (hoặc vòng trước vòng đang dở).
+7c. Cố ý tạo tình huống (a) dừng hỏi quyết định lúc implement, trả lời, bot commit tiếp — rồi (b)
+    ngay sau đó ép job implement gặp lỗi kỹ thuật thật → job retry, branch reset về đúng commit của
+    bước (a) (không mất quyết định vừa trả lời), không hỏi lại câu đã trả lời.
 8. Merge PR code → job finalize tự chạy: Project Knowledge được cập nhật, `work/{feature}/` chuyển
    sang `work/completed/{feature}/`, không có commit nào reset `main`.
 9. Xác nhận việc merge PR spec ở bước 3 không kích hoạt finalize — chỉ bước 8 mới kích hoạt.
