@@ -66,6 +66,22 @@ jobs:
         if: steps.slug.outputs.already_done == 'false'
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install Codex sync tooling
+        if: steps.slug.outputs.already_done == 'false'
+        # documentation-writing's Feature Finalization Mode runs ~/.claude/scripts/sync-to-codex.sh
+        # whenever it updates Project Knowledge under .claude/** (the normal finalize path, not an
+        # edge case) — that script only exists on a developer's own machine, never on a bare CI
+        # runner, so it must be fetched here the same way the Claude CLI itself is installed fresh
+        # each run. Only python3 is required (preinstalled on ubuntu-latest); no other dependency.
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.claude/scripts"
+          curl -fsSL -o "$HOME/.claude/scripts/sync-to-codex.py" \
+            https://raw.githubusercontent.com/thanhpd56/molyanov-ai-dev/main/scripts/sync-to-codex.py
+          curl -fsSL -o "$HOME/.claude/scripts/sync-to-codex.sh" \
+            https://raw.githubusercontent.com/thanhpd56/molyanov-ai-dev/main/scripts/sync-to-codex.sh
+          chmod +x "$HOME/.claude/scripts/sync-to-codex.sh"
+
       - name: Finalize with retry
         if: steps.slug.outputs.already_done == 'false'
         env:
@@ -87,7 +103,7 @@ jobs:
               break
             fi
 
-            PROMPT="Use the online-pipeline skill (skills/online-pipeline/SKILL.md), stage \"finalize\".
+            PROMPT="Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"finalize\".
           Issue: #$ISSUE_NUMBER
           Feature slug: $SLUG
           Feature folder: work/$SLUG

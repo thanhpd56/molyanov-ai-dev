@@ -42,7 +42,9 @@ in the `work/` folder.
 
 This repo already has the GitHub Actions workflow files to run the whole feature lifecycle (issue →
 interview → spec PR → approve → implement → code PR → finalize) through GitHub only, no local
-terminal needed. They are inert until setup is finished:
+terminal needed — plus a vendored snapshot, under `.claude/skills/` and `.claude/agents/`, of every
+skill and agent those workflows depend on (a CI runner has no access to your machine's global
+`~/.claude/skills/`, so this repo carries its own copy). All of it is inert until setup is finished:
 
 1. Install the Claude GitHub App on this repository (run `claude` locally once and use
    `/install-github-app`, or visit https://github.com/apps/claude).
@@ -52,5 +54,10 @@ terminal needed. They are inert until setup is finished:
 3. Create a Personal Access Token (`repo` scope) at https://github.com/settings/tokens and store it
    as the `GH_PAT` repo secret (needed only so approving a spec PR can trigger the implement job).
 
-No script needed for this repo — the workflow files are already in place. Once the secrets are set,
-open a new issue to start the pipeline.
+No script needed for this repo — the workflow files and vendored skills are already in place. Once
+the secrets are set, open a new issue to start the pipeline.
+
+The vendored skills/agents are a snapshot and will go stale as the upstream framework evolves.
+Re-run `.claude/skills/online-pipeline/scripts/vendor-skills.sh` anytime to pull the latest versions
+(clones the public source repo, no auth needed) — nothing is committed automatically, review the
+diff first.

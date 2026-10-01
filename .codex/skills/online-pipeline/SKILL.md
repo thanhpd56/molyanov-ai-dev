@@ -49,17 +49,49 @@ The agent communicates with the user exclusively through `gh issue comment {issu
 "..."` — chat/stdout output is not read by anyone in a CI job. Every stage prompt supplies the
 issue number explicitly; use it for every comment.
 
+## Why Skills Must Be Vendored Into the Target Repo
+
+A GitHub Actions runner has no `~/.claude/skills/` or `~/.claude/agents/` — those only exist on a
+developer's own machine. `claude -p` running in a CI job can only use a skill or agent that
+physically exists in the checked-out repo's own `.claude/skills/` or `.claude/agents/`. Every
+stage here drives `user-spec-planning`, `code-writing`, `documentation-writing`, or `test-master`,
+which between them spawn nine reviewer/research agents (`code-researcher`,
+`interview-completeness-checker`, `skeptic`, `userspec-quality-validator`,
+`userspec-adequacy-validator`, `code-reviewer`, `security-auditor`, `test-reviewer`,
+`documentation-reviewer`) — all of it, plus this skill itself, must be vendored into the target
+repo's `.claude/skills/` and `.claude/agents/`. Every stage prompt in this file references the
+skill it needs by its *vendored* path, `.claude/skills/{name}/SKILL.md` — not this source repo's
+own bare `skills/{name}/SKILL.md` layout, which only resolves inside this specific repo.
+
+`scripts/vendor-skills.sh` does this by cloning `https://github.com/thanhpd56/molyanov-ai-dev`
+(public, no auth) and copying the exact closure listed above, plus refreshing the three
+`.github/workflows/online-pipeline-*.yml` files themselves — it is the single update path for both
+the automation logic and the skills/agents driving it. Re-run it anytime to pick up upstream
+changes. It refuses to run over uncommitted local edits to anything it would overwrite (commit or
+stash first), validates the full closure is present in the source before changing anything (no
+partial update), and never commits on its own — review the diff and commit when ready.
+
+The `finalize` stage has one further runner-only dependency beyond skills/agents:
+`documentation-writing`'s Feature Finalization Mode runs `~/.claude/scripts/sync-to-codex.sh`
+whenever it updates Project Knowledge (the normal path, not an edge case). That script isn't a
+skill or agent, so `vendor-skills.sh` doesn't carry it — `online-pipeline-finalize.yml` installs it
+directly onto the runner's `$HOME` from the same source repo before invoking `claude -p`.
+
 ## Setup (human-facing)
 
 To enable online-pipeline on an existing repository, resolve this skill's directory and run
-`scripts/setup-online-pipeline.sh` from the target repo root. It copies the three workflow files
-from `assets/workflows/` into `.github/workflows/`, offers to set the needed secrets via `gh secret
-set`, and prints the manual steps the user must still do in a browser (see the script's own output
-for the authoritative, current list).
+`scripts/setup-online-pipeline.sh` from the target repo root. It vendors the workflow files and
+their full skill/agent closure (via `vendor-skills.sh`, see above), creates the two labels the
+workflows apply, offers to set the needed secrets via `gh secret set`, and prints the manual steps
+the user must still do in a browser (see the script's own output for the authoritative, current
+list).
 
-A project scaffolded by `project-initialization` already has these workflow files in
-`.github/workflows/` (see that skill's `assets/new-project/`) — do not run the setup script there;
-only the secrets and the manual browser steps remain.
+A project scaffolded by `project-initialization` already has the workflow files in
+`.github/workflows/` and a vendored snapshot of this skill closure in `.claude/skills/` /
+`.claude/agents/` (see that skill's `assets/new-project/`) — do not run the setup script there;
+only the secrets and the manual browser steps remain. That vendored snapshot can still go stale
+the same way an existing project's can, so `scripts/vendor-skills.sh` (already present at
+`.claude/skills/online-pipeline/scripts/` in a scaffolded project) is the update path there too.
 
 ## Stages
 
@@ -168,3 +200,10 @@ updated files over
 `skills/project-initialization/assets/new-project/.github/workflows/` (plain duplicates, not a
 build step or symlink — matches how that scaffold already vendors
 `.claude/skills/project-knowledge/`) and update the matching steps in that scaffold's `README.md`.
+
+If a stage starts depending on a different skill or agent (the closure listed in
+[Why Skills Must Be Vendored](#why-skills-must-be-vendored-into-the-target-repo)), update
+`vendor-skills.sh`'s `SKILLS=(...)`/`AGENTS=(...)` arrays and re-run it over
+`skills/project-initialization/assets/new-project/.claude/` (that scaffold's copy is a vendored
+snapshot like any other project's, not a live link — it goes stale the same way and is refreshed
+the same way).

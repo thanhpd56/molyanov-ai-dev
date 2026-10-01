@@ -198,7 +198,7 @@ jobs:
           set -euo pipefail
           PROMPT_FILE="$(mktemp)"
           {
-            echo "Use the online-pipeline skill (skills/online-pipeline/SKILL.md), stage \"userspec-turn\"."
+            echo "Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"userspec-turn\"."
             echo "Issue: #$ISSUE_NUMBER"
             echo "Feature slug: $SLUG"
             echo "Feature folder: work/$SLUG"

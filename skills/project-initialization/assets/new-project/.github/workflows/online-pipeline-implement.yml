@@ -154,7 +154,7 @@ jobs:
 
             PROMPT_FILE="$(mktemp)"
             {
-              echo "Use the online-pipeline skill (skills/online-pipeline/SKILL.md), stage \"$STAGE_NAME\"."
+              echo "Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"$STAGE_NAME\"."
               echo "Issue: #$ISSUE_NUMBER"
               echo "Feature slug: $SLUG"
               echo "Feature folder: work/$SLUG"

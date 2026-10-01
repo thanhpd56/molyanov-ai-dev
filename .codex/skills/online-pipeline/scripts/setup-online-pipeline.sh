@@ -4,35 +4,29 @@
 #
 # Usage: ./setup-online-pipeline.sh
 #
-# Run from the target project root (not from this skill's own directory). Copies the online-pipeline
-# workflow files into .github/workflows/, offers to set the required secrets via `gh secret set`, and
-# prints the manual steps that cannot be scripted.
+# Run from the target project root (not from this skill's own directory). Vendors the
+# online-pipeline workflow files plus every skill/agent they depend on, offers to set the required
+# secrets via `gh secret set`, creates the needed labels, and prints the manual steps that cannot
+# be scripted.
 #
-# A project scaffolded by project-initialization already has these workflow files; run this script
-# only on a pre-existing repo that does not.
+# A project scaffolded by project-initialization already has all of this vendored in; run this
+# script only on a pre-existing repo that does not.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
-WORKFLOWS_SRC="$SKILL_DIR/assets/workflows"
-
-if [[ ! -d "$WORKFLOWS_SRC" ]]; then
-  echo "Error: workflow templates not found: $WORKFLOWS_SRC" >&2
-  exit 1
-fi
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "Error: gh (GitHub CLI) is required and was not found on PATH" >&2
   exit 1
 fi
 
-# --- Copy workflow files ---
-mkdir -p .github/workflows
-for f in "$WORKFLOWS_SRC"/*.yml; do
-  cp "$f" ".github/workflows/$(basename "$f")"
-  echo "Copied $(basename "$f") -> .github/workflows/"
-done
+# --- Vendor the workflows plus every skill/agent claude -p needs on a bare CI runner ---
+# A GitHub Actions runner has no ~/.claude/skills or ~/.claude/agents, so every skill and agent
+# the pipeline's claude -p calls depend on (user-spec-planning, code-writing, documentation-writing,
+# test-master, online-pipeline itself, and the 9 agents they spawn) must live in this repo's own
+# .claude/. Re-run scripts/vendor-skills.sh anytime later to pick up upstream updates.
+"$SCRIPT_DIR/vendor-skills.sh"
 
 # --- Create the labels the workflows apply (gh pr create --label fails on a missing label) ---
 for label in userspec-spec userspec-implement; do
@@ -93,4 +87,7 @@ Remaining manual steps (cannot be scripted — each requires browser authenticat
 
 Once all three secrets are set and the GitHub App is installed, open a new issue on this repo to
 start the pipeline.
+
+To pick up a newer version of the vendored skills/agents later, re-run:
+  .claude/skills/online-pipeline/scripts/vendor-skills.sh
 EOF
