@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-03 08:37:59"
-  last_updated: "2026-10-03 14:50:00"
+  last_updated: "2026-10-03 15:10:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -274,6 +274,18 @@ conversation_history:
       2 chấp nhận hạn chế
       3. chuyển feature này lên online
       4. thêm cảnh báo thôi.
+
+  - asked_at: "2026-10-03 15:10:00"
+    topic_keys: ["error_scenarios", "risks"]
+    agent_questions: |
+      [Validation round 3 — adequacy phát hiện double-failure] Nếu bước revert (khi comment
+      `/switch-online` thất bại) CŨNG thất bại luôn (vd mạng vẫn đang mất ngay lúc đó) — branch sẽ
+      bị kẹt lại đúng ở trạng thái nguy hiểm mà cơ chế revert được tạo ra để tránh. Đề xuất: không
+      thêm retry loop phức tạp — khi revert thất bại, báo lỗi to, rõ ràng, kèm hướng dẫn khắc phục
+      tay cụ thể (vd "branch feature/{slug} có thể đang kẹt ở trạng thái awaiting_decision giả —
+      vào GitHub tự xoá branch hoặc sửa file status marker trước khi dùng lại issue này"), chấp
+      nhận đây là rủi ro hãn hữu v1, không xây cơ chế tự phục hồi phức tạp hơn. Đồng ý?
+    user_answer: "ok"
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]
@@ -609,6 +621,11 @@ user_experience:
         tới (route job thật dispatch chỉ dựa branch+marker, không đọc nội dung comment, nên để
         marker ở `awaiting_decision` mà không có comment đúng sẽ khiến bất kỳ comment khác lỡ xuất
         hiện bị hiểu nhầm thành câu trả lời giả).
+      - Nếu bước revert ở trên (sau khi đăng comment thất bại) CŨNG thất bại (vd mạng vẫn mất ngay
+        lúc đó) → không retry loop phức tạp; báo lỗi to, rõ ràng, kèm hướng dẫn khắc phục tay cụ
+        thể (vd branch `feature/{slug}` có thể đang kẹt ở trạng thái `awaiting_decision` giả — tự
+        xoá branch hoặc sửa file status marker trên GitHub trước khi dùng lại issue đó); chấp nhận
+        là rủi ro hãn hữu v1 (double-failure mạng liên tiếp).
       - `gh issue close` thất bại lúc finalize local hoàn tất → finalize local vẫn coi là thành công
         (archive `work/{feature}` vẫn xảy ra), chỉ log/báo không đóng được issue, không rollback
         finalize vì lỗi phụ này.
@@ -671,6 +688,20 @@ user_experience:
         chưa setup xong vẫn tự tạo issue thật dù switch chưa thể hoạt động. **Mitigation:** chấp
         nhận hạn chế (không khả thi kỹ thuật để phát hiện từ file repo), thêm 1 dòng cảnh báo ngắn
         lúc tạo issue đầu tiên nhắc user hoàn tất setup.
+      - **Risk 8:** [Ghi lại quyết định đã chốt từ sớm, chưa từng được đưa vào Risks trước đây —
+        phát hiện lại ở validation round 3, quality] Switch-to-local KHÔNG tự đổi/re-arm lại label
+        `local-placeholder` hay bất kỳ cơ chế chặn nào sau khi quay về local — nếu lỡ có comment
+        khác (bot, collaborator, hay chính user) xuất hiện trên issue trong lúc đang làm local sau
+        1 vòng switch-to-online→switch-to-local, route job (dispatch chỉ dựa branch+marker, không
+        có tín hiệu "đang có người làm local") vẫn có thể bị kích hoạt nhầm. **Mitigation:** chấp
+        nhận bỏ qua race-condition này cho v1 (quyết định đã chốt từ đầu interview) — hãn hữu trong
+        thực tế dùng solo, không xây cơ chế khóa/re-arm phức tạp hơn.
+      - **Risk 9:** Nếu bước revert (khi đăng comment `/switch-online` thất bại) CŨNG thất bại (vd
+        mạng vẫn mất ngay lúc đó) → branch bị kẹt lại đúng trạng thái nguy hiểm mà cơ chế revert
+        được tạo ra để tránh. **Mitigation:** không thêm retry loop phức tạp — báo lỗi to, rõ
+        ràng, kèm hướng dẫn khắc phục tay cụ thể (vd tự xoá branch hoặc sửa status marker trên
+        GitHub trước khi dùng lại issue đó); chấp nhận là rủi ro hãn hữu v1 (double-failure mạng
+        liên tiếp).
     gaps: []
     required: true
 

@@ -122,6 +122,11 @@ cả giữa chừng 1 giai đoạn.
      sẽ bị hiểu nhầm thành câu trả lời giả cho 1 câu hỏi không tồn tại. Trường hợp thành công bình
      thường (push rồi comment ngay sau, không lỗi) vẫn còn 1 khoảng hở rất nhỏ do độ trễ mạng —
      chấp nhận là rủi ro hãn hữu v1 (xem Risks), không xây cơ chế khóa/giao dịch phức tạp hơn.
+     **Nếu bước revert này CŨNG thất bại** (vd mạng vẫn mất ngay lúc đó): không thêm retry loop
+     phức tạp — báo lỗi to, rõ ràng, kèm hướng dẫn khắc phục tay cụ thể (branch `feature/{slug}`
+     có thể đang kẹt ở trạng thái `awaiting_decision` giả — tự xoá branch hoặc sửa file status
+     marker trên GitHub trước khi dùng lại issue đó); chấp nhận là rủi ro hãn hữu v1
+     (double-failure mạng liên tiếp, xem Risk 9).
 7. Giai đoạn finalize chạy nhanh, atomic (commit thẳng vào `main`, không có checkpoint giữa
    chừng) — switch ở giai đoạn này chỉ có nghĩa là chọn NƠI finalize chạy (local hay online) trước
    khi bắt đầu, không có khái niệm "giữa chừng finalize" để switch, vì bản chất atomic của bước
@@ -188,6 +193,8 @@ cả giữa chừng 1 giai đoạn.
 - [ ] Branch push thành công nhưng đăng comment `/switch-online` lỗi (mất mạng, quyền `gh` không
       đủ) → dừng, báo lỗi rõ, không coi switch là đã thành công, VÀ tự revert status marker (hoặc
       xoá branch nếu lần đầu tạo) về trạng thái không kích hoạt dispatch của route job thật.
+- [ ] Nếu bước revert ở trên CŨNG thất bại (vd mạng vẫn mất) → báo lỗi to, rõ ràng, kèm hướng dẫn
+      khắc phục tay cụ thể (không retry loop phức tạp, không âm thầm bỏ qua).
 - [ ] Người dùng gõ "chuyển feature này lên online" (hoặc biến thể tương tự) ở local Claude Code
       CLI → `online-pipeline/SKILL.md` nhận diện đúng và bắt đầu switch-to-online; tương tự "chuyển
       feature này về local" kích hoạt switch-to-local.
@@ -320,6 +327,16 @@ cả giữa chừng 1 giai đoạn.
   không phát hiện được secrets/GitHub App đã cấu hình xong chưa — project vendor nhưng chưa setup
   xong vẫn tự tạo issue thật dù switch chưa thể hoạt động. **Mitigation:** chấp nhận hạn chế (không
   khả thi kỹ thuật để phát hiện từ file repo), thêm 1 dòng cảnh báo ngắn lúc tạo issue đầu tiên.
+- **Risk 9:** Switch-to-local KHÔNG tự đổi/re-arm lại label `local-placeholder` hay bất kỳ cơ chế
+  chặn nào sau khi quay về local — nếu lỡ có comment khác (bot, collaborator, hay chính user) xuất
+  hiện trên issue trong lúc đang làm local sau 1 vòng switch-to-online→switch-to-local, route job
+  (dispatch chỉ dựa branch+marker, không có tín hiệu "đang có người làm local") vẫn có thể bị kích
+  hoạt nhầm. **Mitigation:** chấp nhận bỏ qua race-condition này cho v1 (quyết định đã chốt từ đầu
+  interview) — hãn hữu trong thực tế dùng solo, không xây cơ chế khóa/re-arm phức tạp hơn.
+- **Risk 10:** Nếu bước revert (khi đăng comment `/switch-online` thất bại) CŨNG thất bại (vd mạng
+  vẫn mất ngay lúc đó) → branch bị kẹt lại đúng trạng thái nguy hiểm mà cơ chế revert được tạo ra
+  để tránh. **Mitigation:** không thêm retry loop phức tạp — báo lỗi to, rõ ràng, kèm hướng dẫn
+  khắc phục tay cụ thể; chấp nhận là rủi ro hãn hữu v1 (double-failure mạng liên tiếp).
 
 ## Accepted Decisions
 - Chọn gắn thẳng khả năng switch vào `online-pipeline/SKILL.md` thay vì tạo skill riêng, vì skill
@@ -388,6 +405,14 @@ cả giữa chừng 1 giai đoạn.
   hiện "project có bật online-pipeline" không phân biệt được project đã setup xong hay chưa — vì
   không khả thi kỹ thuật để phát hiện từ file repo (secrets/GitHub App không nằm trong file),
   thêm cảnh báo là đủ, không chặn Start path hay xây cơ chế phát hiện mới.
+- Ghi lại quyết định đã chốt từ sớm trong interview, chưa từng được đưa vào Risks (phát hiện lại ở
+  validation round 3 — quality): switch-to-local KHÔNG tự re-arm label `local-placeholder` hay bất
+  kỳ cơ chế chặn nào khi quay về local sau 1 vòng switch-to-online→switch-to-local — chấp nhận bỏ
+  qua race-condition này cho v1, hãn hữu trong thực tế dùng solo.
+- Chọn không thêm retry loop cho trường hợp bước revert (sau khi đăng comment thất bại) CŨNG thất
+  bại (sau validation round 3 — phát hiện của adequacy) — chỉ báo lỗi to kèm hướng dẫn khắc phục
+  tay, chấp nhận là rủi ro hãn hữu v1 (double-failure mạng liên tiếp), vì xây cơ chế tự phục hồi
+  phức tạp hơn không tương xứng với tần suất xảy ra thực tế.
 
 ## Testing
 
@@ -420,6 +445,7 @@ GitHub API, git, và các skill Claude Code hiện có, không phải logic có 
 | 10. Đọc đoạn xử lý lỗi đăng comment `/switch-online` trong `online-pipeline/SKILL.md` | Có nhánh: branch push thành công nhưng comment lỗi → dừng, báo lỗi, không coi là switch thành công, VÀ tự revert marker/branch về trạng thái không kích hoạt dispatch |
 | 11. Đọc frontmatter "Use when" của `online-pipeline/SKILL.md` | Có cụm trigger ngôn ngữ tự nhiên cho switch-to-online ("chuyển feature này lên online") và switch-to-local ("chuyển feature này về local") |
 | 12. Đọc đoạn tạo issue trong Start path đã sửa | Có dòng cảnh báo ngắn nhắc hoàn tất setup online-pipeline khi tạo issue đầu tiên |
+| 13. Đọc đoạn revert trong `online-pipeline/SKILL.md` | Có nhánh: revert thất bại → báo lỗi to kèm hướng dẫn khắc phục tay cụ thể, không có retry loop |
 
 Agent chỉ kiểm tra được các mục tĩnh trên (file đúng chỗ, cú pháp hợp lệ, điều kiện route job đúng
 tên biến/giá trị). Agent không thể tự tạo issue GitHub thật, chờ GitHub Actions chạy, hay tự đóng
@@ -483,3 +509,9 @@ agent chạy một lần.
 21. Trên 1 project đã vendor file workflow online-pipeline nhưng CHƯA cấu hình xong secrets/GitHub
     App → Start feature mới ở local → xác nhận issue vẫn được tạo (không bị chặn), kèm đúng dòng
     cảnh báo nhắc hoàn tất setup.
+22. Switch-to-online (tạo branch/PR online dở), rồi switch-to-local và hoàn tất toàn bộ phần còn
+    lại ở local mà KHÔNG merge PR/branch online đó → xác nhận finalize local vẫn hoàn tất bình
+    thường (issue tự đóng, `work/{feature}` archive) dù PR/branch online đó còn tồn tại mở.
+23. Cố ý làm CẢ bước đăng comment `/switch-online` lẫn bước revert sau đó đều thất bại (vd cắt
+    mạng kéo dài qua cả 2 bước) → xác nhận báo lỗi to, rõ ràng, có hướng dẫn khắc phục tay cụ thể
+    (không bị treo im lặng, không tự động retry vô hạn).
