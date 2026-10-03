@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-03 08:37:59"
-  last_updated: "2026-10-03 10:25:00"
+  last_updated: "2026-10-03 11:00:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -221,6 +221,23 @@ conversation_history:
         bước 1 implement gốc, không coi là trả lời câu hỏi nào.
       Đồng ý?
     user_answer: "ok"
+
+  - asked_at: "2026-10-03 11:00:00"
+    topic_keys: ["constraints", "integration_points"]
+    agent_questions: |
+      [Validation round 1 — adequacy validator phát hiện vấn đề nghiêm trọng] `online-pipeline/
+      SKILL.md` hiện tại đã có sẵn cơ chế gọi `user-spec-planning`'s Start path TỪ BÊN TRONG chính
+      GitHub Actions job (stage userspec-turn), luôn gọi kèm "slug đã cho sẵn, không để Start path
+      tự chọn". Nếu gắn "luôn tạo issue mới + tính slug từ issue" KHÔNG điều kiện vào Start path
+      (chỉ dựa vào "project có bật online-pipeline"), mỗi khi online-pipeline tự gọi Start path
+      (kể cả lần đầu hoàn toàn bình thường, không liên quan hybrid switch) sẽ tự tạo thêm 1 issue
+      thừa khác, phá vỡ chính luồng online-pipeline gốc.
+      Đề xuất: chỉ kích hoạt "tự tạo issue + tính slug từ issue" khi Start path được gọi MÀ KHÔNG
+      có slug nào được truyền sẵn (người dùng gõ tương tác ở local, chưa có slug) — khi
+      online-pipeline tự gọi Start path với slug đã cho sẵn (đúng hợp đồng hiện có), bỏ qua nhánh
+      tạo issue mới hoàn toàn, dùng slug được cho như cũ. Không cần tín hiệu mới — tái dùng đúng
+      phân biệt "có slug sẵn hay không" mà hợp đồng hiện tại đã có. Đồng ý?
+    user_answer: "ok"
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]
@@ -310,6 +327,15 @@ general_understanding:
     value: |
       - Chỉ áp dụng hành vi "tạo issue ngay từ đầu + slug theo issue" cho project đã bật
         online-pipeline; project không bật giữ nguyên Start path hiện tại (tự chọn slug).
+      - Hành vi "tự tạo issue" CHỈ kích hoạt khi Start path được gọi MÀ KHÔNG có slug nào được
+        truyền sẵn (người dùng gõ tương tác ở local, chưa có slug) — khi `online-pipeline` tự gọi
+        Start path TỪ BÊN TRONG GitHub Actions job (stage `userspec-turn`, đã luôn gọi kèm slug có
+        sẵn, "không để Start path tự chọn", theo đúng hợp đồng hiện có không đổi) thì bỏ qua hoàn
+        toàn nhánh tạo issue mới, dùng slug được cho như cũ. Không cần tín hiệu mới — tái dùng
+        đúng phân biệt "có slug sẵn hay không" mà hợp đồng hiện tại đã có. Thiếu điều kiện này sẽ
+        khiến mọi lần online-pipeline tự gọi Start path (kể cả lần đầu hoàn toàn bình thường,
+        không liên quan hybrid switch) tự tạo thêm 1 issue thừa khác, phá vỡ luồng online-pipeline
+        gốc.
       - Không sửa trigger logic (`on:` conditions) của workflow YAML hiện có — chỉ thêm nhận diện
         literal token `/switch-online` trong nội dung comment (cùng cơ chế với
         `ONLINE_PIPELINE_AUTOMATED`), tái dùng nguyên `issue_comment`/`pull_request merge` đã có.
@@ -340,12 +366,26 @@ general_understanding:
         kể cả khi userspec làm hoàn toàn local rồi mới switch ở giai đoạn implement. Label được gỡ
         bất kể switch-to-online xảy ra ở giai đoạn nào (userspec hay implement), không chỉ riêng
         lúc switch ở userspec.
-      - Route job của `online-pipeline-userspec.yml` thêm 1 dấu hiệu thật thứ 3 vào logic phát
-        hiện "userspec đã xong" có sẵn (branch `userspec/{slug}` tồn tại, hoặc `status: approved`
-        trên main): coi là đã xong nếu branch `feature/{slug}` tồn tại trên remote — bao phủ đúng
-        case bypass (làm hoàn toàn local, switch lần đầu ở giữa implement) mà 2 dấu hiệu cũ không
-        tạo ra. Không dựa vào việc gỡ label `local-placeholder` để suy luận "userspec đã xong" —
-        label chỉ dùng để chặn race tạm thời lúc chưa switch, không phải tín hiệu hoàn thành.
+      - [Sửa chính xác lại sau validation round 1 — skeptic phát hiện mô tả sai cấu trúc logic
+        thật] Logic phát hiện "userspec đã xong" thật của route job KHÔNG phải 2 dấu hiệu OR phẳng
+        — là nested if/else: nếu branch `userspec/{slug}` KHÔNG tồn tại → đọc `status: approved`
+        từ `work/{slug}/user-spec.md` trên default branch (main) → approved thì skip, chưa thì
+        start; nếu branch TỒN TẠI → checkout branch đó, đọc `status: approved` TỪ CHÍNH BRANCH đó
+        → approved thì skip, chưa thì continue. Bản thân "branch tồn tại" không phải dấu hiệu
+        "xong" — ngược lại, case bình thường (branch tồn tại, chưa approved) nghĩa là "đang dở",
+        phải trả về continue. Dấu hiệu thứ 3 (`feature/{slug}` tồn tại) phải được chèn vào ĐÚNG
+        nhánh "branch `userspec/{slug}` KHÔNG tồn tại" (song song với check `status: approved` trên
+        main) — vì case bypass chính là case branch đó không tồn tại — KHÔNG được gộp thành 1 OR
+        phẳng với "branch tồn tại", nếu không sẽ phá luồng continue bình thường. Không dựa vào
+        việc gỡ label `local-placeholder` để suy luận "userspec đã xong" — label chỉ dùng để chặn
+        race tạm thời lúc chưa switch, không phải tín hiệu hoàn thành.
+      - Label `local-placeholder` (mới, chưa tồn tại trong project nào đã bật online-pipeline từ
+        trước) phải được tạo defensively giống đúng cách 2 label hiện có (`userspec-spec`,
+        `userspec-implement`) đã làm: thêm vào `setup-online-pipeline.sh` (tạo 1 lần lúc setup) VÀ
+        kiểm tra/tạo inline ngay trước khi dùng (`gh label list ... | grep -qx local-placeholder
+        || gh label create local-placeholder`) ở chỗ switch-skill/Start path gọi `gh issue create
+        --label local-placeholder` — để không lỗi "label not found" trên project đã bật
+        online-pipeline từ trước khi feature này tồn tại.
       - Thứ tự bắt buộc khi switch-to-online (ở userspec hoặc implement): gỡ label
         `local-placeholder` TRƯỚC, rồi mới đăng comment `/switch-online` SAU — route job đọc trạng
         thái label từ snapshot payload của chính event comment đó; nếu đăng comment trước, sự kiện
@@ -586,9 +626,14 @@ integration:
         định nghĩa token `/switch-online`, logic switch-to-online/switch-to-local cho cả 3 giai
         đoạn.
       - `skills/user-spec-planning/SKILL.md` Step 1 (Start or Resume): thêm nhánh tạo issue GitHub
-        + tính slug theo issue, chỉ khi project có bật online-pipeline (cần cách phát hiện: sự tồn
-        tại của `.github/workflows/online-pipeline-userspec.yml` đã vendor, theo đúng cách
-        `online-pipeline/SKILL.md` đã mô tả "asleep by default").
+        + tính slug theo issue, CHỈ khi (a) project có bật online-pipeline (phát hiện qua sự tồn
+        tại của `.github/workflows/online-pipeline-userspec.yml` đã vendor) VÀ (b) Start path được
+        gọi MÀ KHÔNG có slug nào truyền sẵn. Khi `online-pipeline/SKILL.md` stage `userspec-turn`
+        tự gọi Start path từ bên trong GitHub Actions job (luôn kèm slug có sẵn, theo đúng hợp
+        đồng hiện có không đổi: "call Start path directly with the given slug, do not let it
+        choose its own slug"), bỏ qua hoàn toàn nhánh tạo issue mới — nếu không, mỗi lần
+        online-pipeline tự gọi Start path (kể cả lần đầu hoàn toàn bình thường) sẽ tự tạo thêm 1
+        issue thừa, phá vỡ luồng online-pipeline gốc.
       - `scripts/init-feature-folder.sh`: không đổi chữ ký (vẫn nhận slug đã tính xong từ bên
         ngoài) — việc tạo issue + tính slug xảy ra TRƯỚC khi gọi script này.
       - Không đụng `code-writing/SKILL.md` hay `documentation-writing/SKILL.md` — switch skill tự
@@ -599,11 +644,17 @@ integration:
         job: (1) `online-pipeline-userspec.yml` route bỏ qua xử lý cho mọi event (`issues: opened`
         và `issue_comment: created`) khi issue có label `local-placeholder` (label được gỡ TRƯỚC
         khi switch-skill đăng comment `/switch-online`, bất kể switch xảy ra ở giai đoạn nào); (2)
-        logic phát hiện "userspec đã xong" có sẵn của route job (branch `userspec/{slug}` tồn tại,
-        hoặc `status: approved` trên main) được bổ sung dấu hiệu thứ 3: branch `feature/{slug}`
-        tồn tại trên remote — để route job không hiểu nhầm bất kỳ comment nào trong lúc implement
-        (không chỉ comment switch đầu tiên) thành yêu cầu bắt đầu interview mới, cho đúng case
-        bypass (userspec hoàn toàn local, switch lần đầu ở giữa implement); (3) stage prompt
+        logic phát hiện "userspec đã xong" có sẵn của route job (nested if/else: nếu branch
+        `userspec/{slug}` không tồn tại → đọc `status: approved` trên main; nếu tồn tại → đọc
+        `status: approved` trên chính branch đó) được bổ sung dấu hiệu thứ 3 CHÈN VÀO ĐÚNG nhánh
+        "branch không tồn tại" (song song với check approved trên main, không gộp OR phẳng với
+        nhánh "branch tồn tại" — tránh phá luồng continue bình thường): branch `feature/{slug}`
+        tồn tại trên remote → cũng coi là "đã xong" — để route job không hiểu nhầm bất kỳ comment
+        nào trong lúc implement (không chỉ comment switch đầu tiên) thành yêu cầu bắt đầu interview
+        mới, cho đúng case bypass (userspec hoàn toàn local, switch lần đầu ở giữa implement);
+        (2b) label `local-placeholder` được tạo defensively (giống `userspec-spec`/
+        `userspec-implement`): thêm vào `setup-online-pipeline.sh` và kiểm tra/tạo inline trước
+        khi dùng; (3) stage prompt
         trong `online-pipeline/SKILL.md` (không phải YAML, không phải route job bash — route job
         của cả 2 workflow không cần đọc nội dung comment để nhận diện `/switch-online`, dispatch
         của chúng vẫn dựa đúng vào branch-existence/label/status-marker như hiện có) ở CẢ
