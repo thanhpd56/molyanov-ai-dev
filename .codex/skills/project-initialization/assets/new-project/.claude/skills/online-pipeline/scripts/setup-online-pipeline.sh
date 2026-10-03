@@ -36,6 +36,12 @@ for label in userspec-spec userspec-implement; do
   fi
 done
 
+# --- Create the label the local/online switch applies to a feature's placeholder issue ---
+if ! gh label list --json name -q '.[].name' 2>/dev/null | grep -qx "local-placeholder"; then
+  gh label create "local-placeholder" --description "online-pipeline" --color "D4C5F9" || true
+  echo "Created label: local-placeholder"
+fi
+
 # --- Offer to set secrets ---
 echo ""
 echo "online-pipeline needs these repo secrets:"

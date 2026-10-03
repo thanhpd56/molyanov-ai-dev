@@ -56,8 +56,34 @@ Otherwise start a new spec:
 
 1. Use the current request as the initial task description. If the intended work is not described,
    ask the user what they want to plan. Infer `feature`, `bug`, or `refactoring`.
-2. Choose a kebab-case slug and tell the user which `work/{slug}` folder will be used. Do not pause
-   only to confirm the slug.
+2. Determine the slug:
+   - If the calling context already supplies a slug (e.g. `online-pipeline/SKILL.md`'s stage
+     `userspec-turn` calling this Start path from inside a GitHub Actions job, which always names
+     the slug to use), use exactly that slug and skip the rest of this step, including the
+     online-pipeline branch below — this applies to every such automated call, not only the first
+     one for a given issue.
+   - Otherwise (an interactive local call with no slug supplied), and the target project root has
+     `.github/workflows/online-pipeline-userspec.yml` (online-pipeline is enabled on this project):
+     create a placeholder GitHub issue before choosing a slug, so the feature can switch to GitHub
+     Actions at any later point (see `online-pipeline/SKILL.md`'s Hybrid Local/Online Switch
+     section). Use that file's Naming Contract for the exact slug formula.
+     1. Confirm `gh` is installed and authenticated (`gh auth status`). If not, report the error and
+        stop here — do not create a feature folder or any other state.
+     2. Create the `local-placeholder` label defensively if it does not already exist:
+        `gh label list --json name -q '.[].name' | grep -qx local-placeholder || gh label create
+        local-placeholder --description "online-pipeline" --color "D4C5F9"`.
+     3. Create an empty issue titled with a short human-readable description of the feature (the
+        same text you would otherwise turn into a slug) and apply the label:
+        `gh issue create --title "{feature title}" --body "" --label local-placeholder`. Print one
+        short warning line noting that the issue will not be processed until online-pipeline setup
+        (secrets, GitHub App) is complete — print it every time this branch runs, not only once:
+        `scripts/setup-online-pipeline.sh` also creates this label eagerly during its own setup, so
+        "the label didn't exist yet" cannot reliably stand in for "this is the first such issue" the
+        way it might seem to.
+     4. Compute `slug = kebab(issue title, truncated to 40 chars) + "-" + issue number`, matching
+        the online-pipeline Naming Contract exactly.
+   - Otherwise (online-pipeline is not enabled on this project): choose a kebab-case slug as before.
+   Tell the user which `work/{slug}` folder will be used. Do not pause only to confirm the slug.
 3. If that exact folder already contains prior user-spec work, ask whether to continue that work in
    the same folder or create the new spec under another slug. If the user chooses the existing
    folder, follow the resume path above. Never overwrite prior work implicitly.
