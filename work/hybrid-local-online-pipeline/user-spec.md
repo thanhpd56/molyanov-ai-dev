@@ -54,6 +54,12 @@ cả giữa chừng 1 giai đoạn.
    slug, do not let it choose its own slug") — mỗi lần đó, điều kiện (b) sai nên nhánh tạo issue
    mới KHÔNG được kích hoạt, tránh tạo thêm 1 issue thừa mỗi khi online-pipeline tự chạy bình
    thường (kể cả lần đầu hoàn toàn không liên quan tới hybrid switch).
+   **Hạn chế đã biết:** việc phát hiện "project có bật online-pipeline" chỉ dựa vào sự tồn tại của
+   file workflow đã vendor — không thể phát hiện từ file liệu secrets/GitHub App đã cấu hình xong
+   chưa (không khả thi kỹ thuật). Trên project đã vendor file nhưng chưa hoàn tất setup, nhánh tạo
+   issue vẫn kích hoạt — Start path in thêm 1 dòng cảnh báo ngắn khi tạo issue đầu tiên: "Lưu ý:
+   nếu chưa hoàn tất setup online-pipeline (secrets, GitHub App), issue này sẽ không được xử lý
+   cho tới khi bạn hoàn tất."
 3. Route job của `online-pipeline-userspec.yml` bỏ qua xử lý cho MỌI event (`issues: opened` và
    `issue_comment: created`) trong khi issue còn label `local-placeholder` — không có comment
    interview nào bị tự động post lên issue trong lúc người dùng đang làm việc ở local (tránh race
@@ -62,7 +68,10 @@ cả giữa chừng 1 giai đoạn.
 
 ### Switch-to-online (local → online)
 5. Bất kỳ lúc nào (kể cả giữa chừng 1 batch câu hỏi interview, hoặc giữa chừng 1 file đang
-   implement), người dùng gọi hành động switch-to-online trong `online-pipeline/SKILL.md`:
+   implement), người dùng gõ câu tự nhiên ở local Claude Code CLI để kích hoạt, ví dụ **"chuyển
+   feature này lên online"** (và các biến thể tương tự — thêm vào "Use when" của frontmatter
+   `online-pipeline/SKILL.md`, theo đúng cách routing bằng ngôn ngữ tự nhiên mọi skill khác đang
+   dùng, không phải slash-command):
    - **Giữa chừng userspec:** push branch `userspec/{slug}` (tạo mới nếu chưa có) với
      `interview.yml` ở trạng thái hiện tại; gỡ label `local-placeholder` khỏi issue; đăng comment
      `/switch-online` lên issue (không kèm câu trả lời thật — câu trả lời thật, nếu có, là 1
@@ -103,9 +112,16 @@ cả giữa chừng 1 giai đoạn.
    `merge`/`rebase`; nếu merge sạch thì tự tiếp tục push; nếu có conflict thật, dừng và hiển thị
    đúng conflict đó cho người dùng tự xử lý trong chat (không tự chọn bên thắng).
    - Nếu branch push thành công nhưng bước đăng comment `/switch-online` lỗi kỹ thuật (mất mạng,
-     quyền `gh` không đủ): dừng, báo lỗi rõ, KHÔNG coi switch là đã thành công — trạng thái local
-     vẫn là nguồn đáng tin cho tới khi comment thật sự lên được issue (branch đã push không đồng
-     nghĩa automation đã được "đánh thức").
+     quyền `gh` không đủ): dừng, báo lỗi rõ, KHÔNG coi switch là đã thành công. **Quan trọng:**
+     route job thật của `online-pipeline-implement.yml` dispatch chỉ dựa "branch tồn tại + marker
+     == `awaiting_decision`", KHÔNG đọc nội dung comment — nhận diện `/switch-online` chỉ xảy ra
+     BÊN TRONG stage prompt, SAU khi job đã dispatch. Vì vậy, nếu comment thất bại sau khi
+     branch+marker đã push, phải tự REVERT marker về trạng thái không kích hoạt dispatch (hoặc xoá
+     branch nếu đây là lần đầu tạo) — không để GitHub ở trạng thái "sẵn sàng dispatch" treo vô thời
+     hạn chờ 1 comment có thể không bao giờ tới, vì bất kỳ comment khác lỡ xuất hiện trong lúc đó
+     sẽ bị hiểu nhầm thành câu trả lời giả cho 1 câu hỏi không tồn tại. Trường hợp thành công bình
+     thường (push rồi comment ngay sau, không lỗi) vẫn còn 1 khoảng hở rất nhỏ do độ trễ mạng —
+     chấp nhận là rủi ro hãn hữu v1 (xem Risks), không xây cơ chế khóa/giao dịch phức tạp hơn.
 7. Giai đoạn finalize chạy nhanh, atomic (commit thẳng vào `main`, không có checkpoint giữa
    chừng) — switch ở giai đoạn này chỉ có nghĩa là chọn NƠI finalize chạy (local hay online) trước
    khi bắt đầu, không có khái niệm "giữa chừng finalize" để switch, vì bản chất atomic của bước
@@ -113,7 +129,8 @@ cả giữa chừng 1 giai đoạn.
 
 ### Switch-to-local (online → local)
 8. Khi đang ở GitHub (dở interview qua comment, hoặc dở implement, có thể đang
-   `awaiting_decision`), người dùng gọi hành động switch-to-local: kiểm tra working tree local có
+   `awaiting_decision`), người dùng gõ câu tự nhiên ở local Claude Code CLI, ví dụ **"chuyển
+   feature này về local"**, để kích hoạt switch-to-local: kiểm tra working tree local có
    thay đổi chưa commit — nếu có, dừng ngay, báo lỗi rõ, yêu cầu người dùng tự commit/stash trước
    (không tự động stash hộ, không checkout đè lên thay đổi chưa lưu). Nếu sạch: `fetch` + checkout
    đúng branch (`userspec/{slug}` hoặc `feature/{slug}`), đọc status marker/`interview.yml`, báo rõ
@@ -169,7 +186,14 @@ cả giữa chừng 1 giai đoạn.
       — không phá luồng continue bình thường (branch `userspec/{slug}` tồn tại, chưa approved) của
       các feature khác không liên quan tới case bypass này.
 - [ ] Branch push thành công nhưng đăng comment `/switch-online` lỗi (mất mạng, quyền `gh` không
-      đủ) → dừng, báo lỗi rõ, không coi switch là đã thành công.
+      đủ) → dừng, báo lỗi rõ, không coi switch là đã thành công, VÀ tự revert status marker (hoặc
+      xoá branch nếu lần đầu tạo) về trạng thái không kích hoạt dispatch của route job thật.
+- [ ] Người dùng gõ "chuyển feature này lên online" (hoặc biến thể tương tự) ở local Claude Code
+      CLI → `online-pipeline/SKILL.md` nhận diện đúng và bắt đầu switch-to-online; tương tự "chuyển
+      feature này về local" kích hoạt switch-to-local.
+- [ ] Project đã vendor file workflow online-pipeline nhưng chưa cấu hình xong secrets/GitHub App
+      → Start feature mới ở local vẫn tạo issue (không chặn), kèm 1 dòng cảnh báo ngắn nhắc hoàn
+      tất setup.
 - [ ] Switch-to-online ở ranh giới implement (code xong local, chưa từng lên GitHub) → PR
       `feature/{slug}` (label `userspec-implement`) được mở đúng.
 - [ ] Switch-to-local (đang dở interview qua comment GitHub) → fetch/checkout đúng branch, báo
@@ -185,6 +209,9 @@ cả giữa chừng 1 giai đoạn.
       đóng (`gh issue close`); nếu đóng thất bại, finalize vẫn coi là thành công, chỉ log cảnh báo.
 - [ ] Finalize chạy online không bị ảnh hưởng — không thêm auto-close issue ở đó.
 - [ ] Không có sửa đổi nào vào `on:` event trigger của 3 workflow YAML hiện có.
+- [ ] Switch online rồi quay về local hoàn tất, không merge PR/branch online đã tạo → PR/branch đó
+      bị bỏ lại mở (hạn chế đã biết, không có cơ chế tự dọn) — xác nhận finalize local vẫn hoàn tất
+      bình thường dù PR/branch đó còn tồn tại.
 
 ## Constraints
 - Chỉ áp dụng hành vi "tạo issue ngay từ đầu + slug theo issue" cho project đã bật
@@ -224,6 +251,22 @@ cả giữa chừng 1 giai đoạn.
      tự khởi tạo file status marker với `status: awaiting_decision` — đúng giá trị route job thật
      của `online-pipeline-implement.yml` cần (`grep -q '^status: awaiting_decision'`) để dispatch
      qua `issue_comment`; không ghi đè nếu branch đã có marker từ trước.
+- Route job thật của `online-pipeline-implement.yml` dispatch chỉ dựa branch+marker, KHÔNG đọc nội
+  dung comment — nhận diện `/switch-online` chỉ xảy ra bên trong stage prompt, SAU khi job đã
+  dispatch. Nếu đăng comment `/switch-online` thất bại SAU KHI branch+marker `awaiting_decision` đã
+  push thành công: phải tự revert marker (hoặc xoá branch nếu lần đầu tạo) về trạng thái không
+  kích hoạt dispatch — không để GitHub treo ở trạng thái "sẵn sàng dispatch" chờ 1 comment có thể
+  không bao giờ tới. Trường hợp thành công bình thường vẫn còn khoảng hở rất nhỏ do độ trễ mạng —
+  chấp nhận là rủi ro hãn hữu v1.
+- Cú pháp kích hoạt switch ở LOCAL (khác `/switch-online` — token đó chỉ dùng phía GitHub comment):
+  câu tự nhiên, thêm vào "Use when" của frontmatter `online-pipeline/SKILL.md`, gồm ít nhất
+  "chuyển feature này lên online" và "chuyển feature này về local" — không phải slash-command.
+- Phát hiện "project có bật online-pipeline" chỉ dựa sự tồn tại file workflow đã vendor — không
+  phát hiện được secrets/GitHub App đã cấu hình xong chưa (không khả thi kỹ thuật). Project vendor
+  nhưng chưa setup xong vẫn tự tạo issue thật — chấp nhận hạn chế, Start path in thêm 1 dòng cảnh
+  báo ngắn lúc tạo issue đầu tiên, không xây cơ chế phát hiện mới.
+- Switch online rồi quay về local hoàn tất không merge PR/branch online đã tạo → không có cơ chế
+  tự dọn (đóng PR/xoá branch); chấp nhận là hạn chế v1.
 - `code-writing` không có git/commit discipline nội tại — switch-to-online giữa implement phải tự
   áp đặt kỷ luật commit/push từ ngoài (switch action làm, giống cách `online-pipeline/SKILL.md` đã
   áp đặt cho automated runs); local tương tác bình thường thì không cần.
@@ -265,6 +308,18 @@ cả giữa chừng 1 giai đoạn.
   chấp nhận vì spec đã được tự duyệt ở local qua đúng luồng `user-spec-planning` Step 6 trước đó.
 - **Risk 5:** Race condition khi switch 2 lần liên tiếp nhanh có thể làm mất 1 phần cập nhật
   (last-write-wins). **Mitigation:** chấp nhận là hạn chế v1, hãn hữu trong thực tế dùng solo.
+- **Risk 6:** Route job thật của `online-pipeline-implement.yml` dispatch chỉ dựa branch+marker,
+  không đọc nội dung comment — ngay cả khi switch-to-online thành công bình thường, vẫn còn 1
+  khoảng hở rất nhỏ (độ trễ mạng giữa lúc push và lúc comment lên được issue) mà 1 comment khác lỡ
+  xuất hiện trong lúc đó có thể bị hiểu nhầm. **Mitigation:** chấp nhận là rủi ro hãn hữu v1; đăng
+  comment THẤT BẠI (không chỉ trễ) được xử lý triệt để hơn bằng tự revert marker/branch.
+- **Risk 7:** Switch online rồi quay về local hoàn tất, không merge PR online đã tạo → PR/branch đó
+  bị bỏ lại mở mãi, không được dọn. **Mitigation:** chấp nhận là hạn chế v1, người dùng tự đóng/xoá
+  tay nếu cần.
+- **Risk 8:** Phát hiện "project có bật online-pipeline" chỉ dựa file workflow đã vendor tồn tại,
+  không phát hiện được secrets/GitHub App đã cấu hình xong chưa — project vendor nhưng chưa setup
+  xong vẫn tự tạo issue thật dù switch chưa thể hoạt động. **Mitigation:** chấp nhận hạn chế (không
+  khả thi kỹ thuật để phát hiện từ file repo), thêm 1 dòng cảnh báo ngắn lúc tạo issue đầu tiên.
 
 ## Accepted Decisions
 - Chọn gắn thẳng khả năng switch vào `online-pipeline/SKILL.md` thay vì tạo skill riêng, vì skill
@@ -317,6 +372,22 @@ cả giữa chừng 1 giai đoạn.
   vào đúng nhánh "branch `userspec/{slug}` không tồn tại", không gộp OR phẳng với nhánh "branch
   tồn tại", để không phá luồng continue bình thường của các feature không liên quan tới case
   bypass.
+- Sửa lại (sau validation round 2 — phát hiện của adequacy): switch-to-online giữa implement phải
+  tự revert status marker/branch nếu đăng comment `/switch-online` thất bại sau khi branch+marker
+  đã push, vì route job thật dispatch chỉ dựa branch+marker chứ không đọc nội dung comment — để
+  GitHub ở trạng thái "sẵn sàng dispatch" treo chờ comment sẽ khiến bất kỳ comment khác lỡ xuất
+  hiện bị hiểu nhầm. Trường hợp thành công bình thường vẫn còn khoảng hở rất nhỏ — chấp nhận là
+  rủi ro hãn hữu v1, không xây cơ chế khóa/giao dịch phức tạp hơn.
+- Chọn chấp nhận hạn chế (sau validation round 2 — phát hiện của adequacy): switch online rồi quay
+  về local hoàn tất không merge PR/branch online đã tạo → không xây cơ chế tự dọn, vì rủi ro hãn
+  hữu và việc dọn tay đơn giản hơn 1 cơ chế tự động mới.
+- Chọn cú pháp kích hoạt switch ở local là câu tự nhiên qua "Use when" của frontmatter (sau
+  validation round 2 — phát hiện của quality), không phải slash-command, để nhất quán với cách
+  routing mọi skill khác trong project đang dùng, thay vì tạo quy ước mới riêng cho feature này.
+- Chọn chấp nhận hạn chế + cảnh báo (sau validation round 2 — phát hiện của quality) cho việc phát
+  hiện "project có bật online-pipeline" không phân biệt được project đã setup xong hay chưa — vì
+  không khả thi kỹ thuật để phát hiện từ file repo (secrets/GitHub App không nằm trong file),
+  thêm cảnh báo là đủ, không chặn Start path hay xây cơ chế phát hiện mới.
 
 ## Testing
 
@@ -346,7 +417,9 @@ GitHub API, git, và các skill Claude Code hiện có, không phải logic có 
 | 7. Đọc đoạn xử lý conflict push khi switch | Có bước `fetch`+`merge`/`rebase` trước khi báo conflict thật cho người dùng |
 | 8. Đọc đoạn finalize local | Có lệnh `gh issue close`, lỗi đóng issue không chặn việc archive `work/{feature}` |
 | 9. Kiểm tra `scripts/init-feature-folder.sh` | Chữ ký không đổi |
-| 10. Đọc đoạn xử lý lỗi đăng comment `/switch-online` trong `online-pipeline/SKILL.md` | Có nhánh: branch push thành công nhưng comment lỗi → dừng, báo lỗi, không coi là switch thành công |
+| 10. Đọc đoạn xử lý lỗi đăng comment `/switch-online` trong `online-pipeline/SKILL.md` | Có nhánh: branch push thành công nhưng comment lỗi → dừng, báo lỗi, không coi là switch thành công, VÀ tự revert marker/branch về trạng thái không kích hoạt dispatch |
+| 11. Đọc frontmatter "Use when" của `online-pipeline/SKILL.md` | Có cụm trigger ngôn ngữ tự nhiên cho switch-to-online ("chuyển feature này lên online") và switch-to-local ("chuyển feature này về local") |
+| 12. Đọc đoạn tạo issue trong Start path đã sửa | Có dòng cảnh báo ngắn nhắc hoàn tất setup online-pipeline khi tạo issue đầu tiên |
 
 Agent chỉ kiểm tra được các mục tĩnh trên (file đúng chỗ, cú pháp hợp lệ, điều kiện route job đúng
 tên biến/giá trị). Agent không thể tự tạo issue GitHub thật, chờ GitHub Actions chạy, hay tự đóng
@@ -397,5 +470,16 @@ agent chạy một lần.
     chưa có sẵn trong repo) → Start feature mới ở local → xác nhận label được tự tạo, không lỗi
     "label not found".
 18. Cố ý làm bước đăng comment `/switch-online` lỗi ngay sau khi branch đã push thành công (vd cắt
-    mạng ngay sau push) → xác nhận switch không bị coi là thành công, trạng thái local vẫn được
-    giữ làm nguồn đáng tin.
+    mạng ngay sau push) → xác nhận switch không bị coi là thành công, VÀ marker/branch được tự
+    revert về trạng thái không kích hoạt dispatch (không còn ở `awaiting_decision` treo).
+19. Hoàn tất interview + approve spec hoàn toàn ở local (chưa từng có branch/PR nào trên GitHub) →
+    gõ "chuyển feature này lên online" NGAY TẠI ranh giới này (chưa bắt đầu implement) → xác nhận
+    PR `userspec/{slug}` (label `userspec-spec`) được mở đúng, chờ `/approve` như luồng online
+    bình thường.
+20. Implement xong hoàn toàn ở local (chưa từng có branch/PR nào trên GitHub cho `feature/{slug}`)
+    → gõ "chuyển feature này lên online" NGAY TẠI ranh giới này (implement đã xong, chưa switch
+    giữa chừng lần nào) → xác nhận PR `feature/{slug}` (label `userspec-implement`) được mở đúng,
+    sẵn sàng review/merge như luồng online bình thường.
+21. Trên 1 project đã vendor file workflow online-pipeline nhưng CHƯA cấu hình xong secrets/GitHub
+    App → Start feature mới ở local → xác nhận issue vẫn được tạo (không bị chặn), kèm đúng dòng
+    cảnh báo nhắc hoàn tất setup.

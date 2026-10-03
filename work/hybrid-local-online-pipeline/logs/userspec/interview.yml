@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-03 08:37:59"
-  last_updated: "2026-10-03 11:00:00"
+  last_updated: "2026-10-03 14:50:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -238,6 +238,42 @@ conversation_history:
       tạo issue mới hoàn toàn, dùng slug được cho như cũ. Không cần tín hiệu mới — tái dùng đúng
       phân biệt "có slug sẵn hay không" mà hợp đồng hiện tại đã có. Đồng ý?
     user_answer: "ok"
+
+  - asked_at: "2026-10-03 14:50:00"
+    topic_keys: ["constraints", "error_scenarios", "risks", "manual_user_actions"]
+    agent_questions: |
+      [Validation round 2 — adequacy + quality phát hiện 4 vấn đề]
+      1. [Nghiêm trọng, adequacy] Route job thật của `online-pipeline-implement.yml` dispatch
+         implement-resume chỉ dựa "branch tồn tại + marker == awaiting_decision", KHÔNG đọc nội
+         dung comment. Nhận diện đúng `/switch-online` chỉ xảy ra TRONG stage prompt, SAU khi job
+         đã dispatch. Khoảng hở giữa lúc push branch+marker và lúc comment `/switch-online` thật
+         sự lên được issue: nếu có bất kỳ comment nào khác xuất hiện trong khoảng đó, job dispatch
+         ngay và hiểu nhầm thành câu trả lời giả — mâu thuẫn với tuyên bố "trạng thái local vẫn là
+         nguồn đáng tin cho tới khi comment lên được issue". Đề xuất: nếu đăng comment thất bại →
+         tự revert marker/branch về trạng thái an toàn (không để GitHub ở trạng thái "sẵn sàng
+         dispatch" treo vô thời hạn); nếu thành công nhưng còn khoảng hở rất nhỏ (độ trễ mạng bình
+         thường) → chấp nhận rủi ro hãn hữu v1, ghi thành Risk mới, không xây cơ chế khóa phức tạp
+         hơn.
+      2. [Nhỏ, adequacy] Switch online rồi quay về local hoàn tất, bỏ lại PR/branch online mở mãi
+         không dọn — dọn luôn hay chấp nhận hạn chế đã biết?
+      3. [Lớn, quality] Spec chưa định nghĩa cụ thể người dùng gõ gì để kích hoạt
+         switch-to-online/switch-to-local ở LOCAL (khác `/switch-online` — đó là token phía GitHub
+         comment). Đề xuất: thêm cụm trigger ngôn ngữ tự nhiên vào "Use when" của
+         `online-pipeline/SKILL.md` frontmatter (vd "chuyển feature này lên online", "switch to
+         online", "chuyển về local", "switch to local"), theo đúng cách routing mọi skill khác
+         đang dùng — hay muốn 1 slash-command cụ thể?
+      4. [Lớn, quality] Phát hiện "project có bật online-pipeline" chỉ dựa file workflow đã vendor
+         tồn tại — không phát hiện được từ file liệu secrets/GitHub App đã cấu hình xong chưa.
+         Project đã vendor nhưng chưa setup xong: mọi feature local mới vẫn tạo issue thật dù
+         switch chưa thể hoạt động. Đề xuất: chấp nhận hạn chế đã biết (ghi Risk mới) + thêm 1
+         dòng cảnh báo ngắn lúc tạo issue đầu tiên ("nếu chưa hoàn tất setup online-pipeline, issue
+         này sẽ không được xử lý cho tới khi xong") — không xây cơ chế phát hiện mới (không khả
+         thi kỹ thuật). Đồng ý không?
+    user_answer: |
+      1 chấp nhận
+      2 chấp nhận hạn chế
+      3. chuyển feature này lên online
+      4. thêm cảnh báo thôi.
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]
@@ -410,6 +446,35 @@ general_understanding:
         `online-pipeline-implement.yml` cần (`grep -q '^status: awaiting_decision'`) để dispatch
         job khi có comment, tái dùng đúng gate có sẵn, không cần sửa YAML. Nếu branch đã tồn tại
         online từ trước (status marker đã có, bất kể giá trị gì) thì không ghi đè.
+      - [Sửa sau validation round 2 — adequacy phát hiện race window] Route job thật của
+        `online-pipeline-implement.yml` dispatch dựa THUẦN vào "branch tồn tại + marker ==
+        awaiting_decision", KHÔNG đọc nội dung comment — nhận diện `/switch-online` chỉ xảy ra bên
+        trong stage prompt, SAU khi job đã dispatch. Nếu bước đăng comment `/switch-online` thất
+        bại SAU KHI branch+marker `awaiting_decision` đã push thành công: switch-to-online phải tự
+        revert marker về trạng thái không kích hoạt dispatch (hoặc xoá branch nếu đây là lần đầu
+        tạo) — không để GitHub ở trạng thái "sẵn sàng dispatch" treo vô thời hạn chờ 1 comment có
+        thể không bao giờ tới, vì bất kỳ comment nào khác lỡ xuất hiện trong lúc đó sẽ bị hiểu
+        nhầm thành câu trả lời giả. Trường hợp thành công bình thường (push rồi comment ngay sau,
+        không lỗi) vẫn còn 1 khoảng hở rất nhỏ do độ trễ mạng — chấp nhận là rủi ro hãn hữu v1,
+        không xây cơ chế khóa/giao dịch phức tạp hơn.
+      - [Chấp nhận hạn chế, sau validation round 2 — adequacy] Nếu người dùng switch-to-online
+        (tạo branch/PR online) rồi switch-to-local và hoàn tất toàn bộ phần còn lại ở local mà
+        không merge PR đó: branch/PR online đó bị bỏ lại mở, KHÔNG có cơ chế tự dọn (đóng PR/xoá
+        branch). Hạn chế đã biết, chấp nhận cho v1.
+      - [Mới, sau validation round 2 — quality] Cú pháp kích hoạt switch ở LOCAL (khác
+        `/switch-online` — token đó chỉ dùng phía GitHub comment): thêm cụm trigger ngôn ngữ tự
+        nhiên vào "Use when" của frontmatter `online-pipeline/SKILL.md`, gồm ít nhất "chuyển
+        feature này lên online" (và cụm tương ứng cho chiều ngược, "chuyển feature này về local"),
+        theo đúng cách routing bằng ngôn ngữ tự nhiên mà mọi skill khác trong project đang dùng —
+        không phải slash-command.
+      - [Chấp nhận hạn chế + cảnh báo, sau validation round 2 — quality] Phát hiện "project có bật
+        online-pipeline" chỉ dựa vào sự tồn tại của file workflow đã vendor — không phát hiện được
+        từ file liệu secrets/GitHub App đã cấu hình xong chưa (không khả thi kỹ thuật, theo
+        `code-research.md`). Trên project đã vendor nhưng chưa setup xong, mọi feature local mới
+        vẫn tạo issue thật dù switch chưa thể hoạt động — chấp nhận là hạn chế đã biết, Start path
+        in thêm 1 dòng cảnh báo ngắn lúc tạo issue đầu tiên ("nếu chưa hoàn tất setup
+        online-pipeline, issue này sẽ không được xử lý cho tới khi xong"), không xây cơ chế phát
+        hiện mới.
       - Switch-to-local: trước khi checkout branch remote, kiểm tra working tree local có thay đổi
         chưa commit; nếu có → dừng, báo lỗi rõ, bắt user tự commit/stash trước khi switch tiếp tục
         (không tự động stash hộ).
@@ -537,9 +602,13 @@ user_experience:
       - Push conflict khi switch (remote có commit mới local chưa có) → tự fetch+merge/rebase; nếu
         tự merge được thì tiếp tục push; nếu conflict thật (không tự merge) → dừng, hiển thị conflict
         cho user tự xử lý trong chat, không tự chọn bên thắng.
-      - Lỗi kỹ thuật khi đăng comment `/switch-online` (vd mất mạng, quyền `gh` không đủ) → dừng,
-        báo lỗi rõ, không coi branch đã push là đã switch thành công (trạng thái local vẫn là nguồn
-        đáng tin cho tới khi comment thật sự lên được issue).
+      - Lỗi kỹ thuật khi đăng comment `/switch-online` (vd mất mạng, quyền `gh` không đủ) SAU KHI
+        branch+marker đã push thành công → dừng, báo lỗi rõ, không coi switch là đã thành công, VÀ
+        tự revert marker (hoặc xoá branch nếu lần đầu tạo) về trạng thái không kích hoạt dispatch —
+        không để GitHub ở trạng thái "sẵn sàng dispatch" treo chờ 1 comment có thể không bao giờ
+        tới (route job thật dispatch chỉ dựa branch+marker, không đọc nội dung comment, nên để
+        marker ở `awaiting_decision` mà không có comment đúng sẽ khiến bất kỳ comment khác lỡ xuất
+        hiện bị hiểu nhầm thành câu trả lời giả).
       - `gh issue close` thất bại lúc finalize local hoàn tất → finalize local vẫn coi là thành công
         (archive `work/{feature}` vẫn xảy ra), chỉ log/báo không đóng được issue, không rollback
         finalize vì lỗi phụ này.
@@ -587,6 +656,21 @@ user_experience:
         `user-spec-planning` Step 6 (Obtain Approval) trước đó rồi.
       - **Risk 4:** Race condition khi switch 2 lần liên tiếp nhanh có thể làm mất 1 phần cập nhật
         (last-write-wins). **Mitigation:** chấp nhận là hạn chế v1, hãn hữu trong thực tế dùng solo.
+      - **Risk 5:** Route job thật của `online-pipeline-implement.yml` dispatch chỉ dựa
+        branch+marker, không đọc nội dung comment — ngay cả khi switch-to-online thành công bình
+        thường (không lỗi), vẫn còn 1 khoảng hở rất nhỏ (độ trễ mạng giữa lúc push và lúc comment
+        lên được issue) mà 1 comment khác lỡ xuất hiện trong lúc đó có thể bị hiểu nhầm.
+        **Mitigation:** chấp nhận là rủi ro hãn hữu v1 (cùng loại với Risk 4); trường hợp đăng
+        comment THẤT BẠI (không chỉ trễ) được xử lý triệt để hơn bằng cách tự revert marker/branch
+        (xem Error Scenarios/Constraints).
+      - **Risk 6:** Switch online rồi quay về local hoàn tất, không merge PR online đã tạo → PR/
+        branch đó bị bỏ lại mở mãi, không được dọn. **Mitigation:** chấp nhận là hạn chế v1, người
+        dùng tự đóng/xoá tay nếu cần.
+      - **Risk 7:** Phát hiện "project có bật online-pipeline" chỉ dựa file workflow đã vendor tồn
+        tại, không phát hiện được secrets/GitHub App đã cấu hình xong chưa — project vendor nhưng
+        chưa setup xong vẫn tự tạo issue thật dù switch chưa thể hoạt động. **Mitigation:** chấp
+        nhận hạn chế (không khả thi kỹ thuật để phát hiện từ file repo), thêm 1 dòng cảnh báo ngắn
+        lúc tạo issue đầu tiên nhắc user hoàn tất setup.
     gaps: []
     required: true
 
@@ -610,11 +694,15 @@ user_experience:
     required: false
 
   manual_user_actions:
-    score: 60
+    score: 85
     value: |
-      User tự gọi lệnh/skill switch (switch-to-online hoặc switch-to-local) khi muốn đổi chỗ làm
-      việc — không có cơ chế tự động phát hiện "user bận" để tự switch hộ. User tự trả lời interview
-      bằng comment khi đang ở online, và tự xử lý conflict thật trong chat khi được skill đưa ra.
+      User tự gõ câu tự nhiên ở local Claude Code CLI để kích hoạt switch — ít nhất "chuyển
+      feature này lên online" (switch-to-online) và cụm tương ứng cho chiều ngược, "chuyển feature
+      này về local" (switch-to-local); thêm vào "Use when" của frontmatter `online-pipeline/
+      SKILL.md`, theo đúng cách routing bằng ngôn ngữ tự nhiên mà mọi skill khác đang dùng — không
+      phải slash-command. Không có cơ chế tự động phát hiện "user bận" để tự switch hộ. User tự
+      trả lời interview bằng comment khi đang ở online, và tự xử lý conflict thật trong chat khi
+      được skill đưa ra.
     gaps: []
     required: false
 
