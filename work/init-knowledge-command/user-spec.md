@@ -79,10 +79,11 @@ ngay trên Slack/GitHub.
      bootstrap, GitHub Actions phải serialize 2 run này lại, không cho chạy song song.
 3. Workflow mới này vendor vào 2 vị trí trong scaffold của `project-initialization` —
    `.github/workflows/` và `.claude/skills/online-pipeline/assets/workflows/` — giống 3 workflow
-   hiện có; `vendor-skills.sh`'s `WORKFLOWS` array thêm file mới. Label `knowledge-init` được tạo
-   defensively (check rồi tạo) ngay tại điểm mỗi nơi áp dụng nó lần đầu — `bootstrap-project.yml`
-   cho đường tự động (repo mới), và Worker's slash-command handler cho đường thủ công (repo cũ) —
-   không qua `setup-online-pipeline.sh` ở bất kỳ đường nào.
+   hiện có; `vendor-skills.sh`'s `WORKFLOWS` array thêm file mới. `setup-online-pipeline.sh`'s
+   block tạo label trước (eager) cũng thêm `knowledge-init`, đúng pattern đã áp dụng cho 3 label
+   hiện có; label còn được tạo inline defensive ngay tại 2 điểm thực sự áp dụng nó —
+   `bootstrap-project.yml` cho đường tự động (repo mới), Worker's slash-command handler cho đường
+   thủ công (repo cũ, sau khi đã re-vendor).
 
 **Phần B — trong repo riêng `control-plane` (cần clone riêng để thực thi):**
 
@@ -96,6 +97,11 @@ ngay trên Slack/GitHub.
      nhúng dòng marker `<!-- slack: channel_id=... thread_ts=... -->` dùng `thread_ts` vừa lấy.
    - Issue này được workflow `online-pipeline-knowledge-init.yml` của repo mới (Phần A) tự nhận và
      chạy `claude -p` ngay turn đầu tiên.
+   - Nếu lời gọi `/relay` để mở message Slack đầu tiên thất bại: `bootstrap-project.yml` vẫn tạo
+     issue `knowledge-init` như thường (phía GitHub không được phép phụ thuộc vào việc Slack có
+     thành công hay không) — chỉ là body issue sẽ không có dòng marker Slack. `relay_to_slack` ở
+     các turn sau đọc thấy không có marker thì tự no-op, đúng như hành vi hiện tại của 1 repo chưa
+     onboard Slack.
 5. Worker thêm 1 slash command Slack mới (tên làm việc: `/init-knowledge`) dùng cho bất kỳ channel
    đã link với 1 repo (mới hoặc cũ), miễn Project Knowledge của repo đó còn thiếu/template/
    partial — cùng pattern với `/new-feature` (ACK <3s, tạo label `knowledge-init` defensively nếu
@@ -111,6 +117,16 @@ ngay trên Slack/GitHub.
      nhận trong `slack-pipeline-interaction` (xem Risks).
    Command này KHÔNG phải công cụ audit lại Project Knowledge đã hoàn chỉnh — nó chỉ chạy đúng
    `create-project-knowledge.md`, không chạy mode "full update/audit" của `documentation-writing`.
+   **Điều kiện tiên quyết cho repo cũ:** repo đó phải đã re-vendor `online-pipeline` (chạy lại
+   `vendor-skills.sh`/`setup-online-pipeline.sh`) SAU KHI feature này merge, để có workflow
+   `online-pipeline-knowledge-init.yml` + điều kiện bỏ qua label `knowledge-init` ở
+   `online-pipeline-userspec.yml`'s route job. Đây không phải yêu cầu mới — đúng quy ước
+   maintenance có sẵn của `online-pipeline` (mọi thay đổi ở `assets/workflows/*.yml` đều cần
+   repo cũ tự re-vendor để nhận, xem "Setup Script Maintenance" trong `online-pipeline/SKILL.md`).
+   Nếu repo cũ chưa re-vendor: issue vẫn tạo được bên Slack/GitHub, nhưng không có workflow nào
+   nhận xử lý nó, và route job cũ (chưa có điều kiện bỏ qua) có thể hiểu nhầm đây là issue
+   `/new-feature` rồi tự chạy `user-spec-planning` — command này KHÔNG tự kiểm tra hay cảnh báo
+   trước việc repo đã re-vendor hay chưa (ngoài phạm vi v1).
 
 ## Acceptance Criteria
 
@@ -139,6 +155,9 @@ ngay trên Slack/GitHub.
   hiện có — xem Agent Verification bên dưới; không cần tạo crash thật để kiểm tra việc này.)
 - [ ] Workflow `online-pipeline-knowledge-init.yml` dùng chung concurrency group
   `online-pipeline-finalize` với `finalize` — 2 run không chạy song song trên cùng repo.
+- [ ] Trên 1 repo cũ ĐÃ re-vendor `online-pipeline` sau khi feature này merge: slash command Slack
+  chạy đúng luồng knowledge-init, không bị `online-pipeline-userspec.yml` route nhầm thành feature
+  thường.
 
 ## Constraints
 
@@ -152,6 +171,13 @@ ngay trên Slack/GitHub.
 - Workflow mới dùng chung concurrency group cố định `online-pipeline-finalize` với `finalize` (không
   tạo group riêng cho `knowledge-init`) — cả hai cùng commit thẳng Project Knowledge vào `main`,
   nên phải serialize với nhau, không chỉ serialize với chính mình.
+- Mỗi turn: commit+push thẳng `main` phải là hành động CUỐI CÙNG của lần chạy đó, không có bước
+  nào chạy sau — đúng luật đã có sẵn ở mọi stage khác ("viết/commit status trước khi exit, không
+  bao giờ sau khi push"). Nhờ vậy retry chỉ có thể xảy ra ở lần chạy CHƯA commit thành công; không
+  bao giờ retry sau khi 1 turn đã commit xong, nên không có nguy cơ hỏi lại/trả lời trùng câu hỏi.
+- Slash command Slack trên repo cũ chỉ hoạt động đúng nếu repo đó đã re-vendor `online-pipeline`
+  sau khi feature này merge (xem Expected Behavior Phần B item 5) — không phải yêu cầu mới, chỉ là
+  quy ước maintenance có sẵn được áp dụng cho đúng.
 - Label `knowledge-init` phân biệt issue này với issue `/new-feature`; `online-pipeline-userspec.
   yml`'s route job phải bỏ qua issue/comment mang label này.
 - Mọi checkpoint của `create-project-knowledge.md` (kể cả 3 checkpoint cuối cycle) đều round-trip
@@ -209,13 +235,15 @@ ngay trên Slack/GitHub.
   phạm "không PR" là commit từng turn thẳng vào `main`.
 - Tái dùng `interview_metadata.status: completed` làm marker hoàn tất/idempotency, không phát sinh
   marker mới.
-- Label `knowledge-init` được tạo defensively (check rồi tạo, idiom đã dùng khắp
-  `online-pipeline` cho mọi label) ngay tại 2 điểm áp dụng nó lần đầu — `bootstrap-project.yml`'s
-  issue-creation call (đường tự động) và Worker's slash-command handler (đường thủ công) — không
-  khớp hệt với 1 site có sẵn nào: `userspec-spec`/`userspec-implement` được tạo tại đúng 1 nơi
-  (trong workflow YAML lúc mở PR), còn `local-placeholder` được tạo trước, 1 lần, bởi
-  `setup-online-pipeline.sh`; `knowledge-init` cần tạo ở 2 nơi khác nhau vì nó được áp dụng từ 2
-  caller khác nhau (control-plane's 2 job khác nhau).
+- Label `knowledge-init` theo đúng pattern 2-điểm-tạo đã có sẵn cho CẢ 3 label hiện tại
+  (`local-placeholder`, `userspec-spec`, `userspec-implement`): mỗi label đều được tạo defensively
+  2 lần — 1 lần tạo trước (eager) trong `setup-online-pipeline.sh` lúc onboard repo, và 1 lần tạo
+  inline ngay tại điểm thực sự áp dụng label đó (`online-pipeline-userspec.yml:275`,
+  `online-pipeline-implement.yml:203`, `user-spec-planning/SKILL.md`'s Start path tương ứng).
+  `knowledge-init` áp dụng cùng pattern: thêm vào block eager-create của
+  `setup-online-pipeline.sh` (để repo onboard/re-vendor sau này đã có sẵn label), VÀ tạo inline
+  defensive ngay tại 2 điểm thực sự áp dụng nó — `bootstrap-project.yml`'s issue-creation call
+  (đường tự động) và Worker's slash-command handler (đường thủ công).
 - Không phát sinh literal signal tự động mới cho `create-project-knowledge.md` — mọi checkpoint
   chỉ round-trip như 1 câu hỏi bình thường; bước "return to main skill" bị stage bỏ qua tường minh.
 - Slash command Slack: lúc đầu chốt "chỉ dùng cho project mới" (bản ghi interview Q5/Q16), sau đó
@@ -249,7 +277,7 @@ tương tự cách `slack-pipeline-interaction` đã được verify.
 |------|-----------------|
 | 1. Đọc lại `documentation-writing/SKILL.md` sau khi sửa | Có dòng trigger "/init-knowledge" trỏ thẳng tới `create-project-knowledge.md`, đúng vị trí/văn phong như dòng "/done" hiện có; không đổi logic routing khác. |
 | 2. Đọc lại `online-pipeline/SKILL.md` sau khi sửa | Naming Contract có thêm label `knowledge-init`; có mục Stage `knowledge-init` mô tả đủ: mỗi turn commit `interview.yml` thẳng `main`, turn cuối commit Project Knowledge + đóng issue, bỏ qua bước "return to main skill", retry 2 lần rồi báo lỗi; `online-pipeline-userspec.yml`'s route job có thêm check bỏ qua label `knowledge-init`. |
-| 3. Đọc workflow mới `online-pipeline-knowledge-init.yml` | Trigger đúng `issues`/`issue_comment` lọc theo label `knowledge-init`; có bước tạo label defensive; không mở branch nào, không gọi `gh pr create`; dùng `concurrency: group: online-pipeline-finalize` (chung với `finalize`, không phải group riêng). |
+| 3. Đọc workflow mới `online-pipeline-knowledge-init.yml` | Trigger đúng `issues`/`issue_comment` lọc theo label `knowledge-init`; KHÔNG có bước tạo label (label do `bootstrap-project.yml`/Worker tạo trước khi issue tồn tại, workflow này chỉ lọc theo label có sẵn); không mở branch nào, không gọi `gh pr create`; dùng `concurrency: group: online-pipeline-finalize` (chung với `finalize`, không phải group riêng); mỗi turn commit+push thẳng `main` là hành động CUỐI CÙNG trước khi job kết thúc — không có bước nào chạy sau đó. |
 | 3b. Đọc retry-loop của workflow mới | Cấu trúc retry (đếm lần thử, reset về `origin/main` khi lỗi, báo lỗi qua `gh issue comment` + `relay_to_slack` sau khi hết lần thử, không rollback) khớp với retry-loop hiện có của `online-pipeline-implement.yml`/`online-pipeline-finalize.yml`. |
 | 4. Đọc `project-initialization/assets/new-project/` sau khi vendor | Workflow mới có mặt ở cả `.github/workflows/` và `.claude/skills/online-pipeline/assets/workflows/`; `vendor-skills.sh`'s `WORKFLOWS` array có tên file mới. |
 | 5. Chạy thử local: gõ "/init-knowledge" trên 1 project test thiếu Project Knowledge | `create-project-knowledge.md`'s Phase 0 bắt đầu ngay, không hỏi thêm bước routing nào. |
@@ -264,7 +292,9 @@ tương tự cách `slack-pipeline-interaction` đã được verify.
   và xác nhận Project Knowledge nằm trên `main`, issue đã đóng. Cần làm tay vì đây là hành vi thật
   trên Slack workspace + GitHub Actions + 1 repo GitHub thật, agent không có quyền truy cập Slack
   workspace hay secrets thật để tự chạy toàn bộ luồng này.
-- Gọi slash command Slack thủ công trên 1 repo cũ (không phải vừa bootstrap) còn thiếu Project
-  Knowledge — xác nhận luồng chạy giống hệt trường hợp tự động (kể cả việc label `knowledge-init`
-  tự được tạo trên repo đó nếu chưa có). Gọi lại trên repo đã hoàn tất — xác nhận Worker chỉ trả
-  lời "đã khởi tạo rồi" qua Slack, không tạo issue/thread mới, không chạy lại interview.
+- Re-vendor `online-pipeline` trên 1 repo cũ (chạy lại `vendor-skills.sh`/
+  `setup-online-pipeline.sh` sau khi feature này merge), rồi gọi slash command Slack thủ công trên
+  repo đó còn thiếu Project Knowledge — xác nhận luồng chạy giống hệt trường hợp tự động (kể cả
+  việc label `knowledge-init` tự được tạo trên repo đó nếu chưa có). Gọi lại trên repo đã hoàn tất
+  — xác nhận Worker chỉ trả lời "đã khởi tạo rồi" qua Slack, không tạo issue/thread mới, không
+  chạy lại interview.
