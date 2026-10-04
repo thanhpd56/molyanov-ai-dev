@@ -1,0 +1,509 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-04 00:00:00"
+  last_updated: "2026-10-04 01:10:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
+conversation_history:
+  - asked_at: "2026-10-04 00:10:00"
+    topic_keys: ["feature_description", "work_type", "user_problem", "constraints"]
+    agent_questions: |
+      1. Bản chất của "/init-knowledge" là gì? Có phải bạn muốn thêm /init-knowledge như một
+      trigger phrase mới trong mô tả của documentation-writing (giống cách /done hiện trỏ tới
+      Feature Finalization Mode), để khi gõ /init-knowledge thì nó chạy luồng tạo Project
+      Knowledge ban đầu (create-project-knowledge.md)? Hay bạn hình dung một cơ chế khác?
+      2. Vấn đề đang gặp là gì cụ thể?
+      3. Phạm vi: interactive only hay cả automated bootstrap qua Slack?
+      4. Mức độ tự động: tự động chạy luôn ngay sau /new-project, hay chỉ đổi câu gợi ý?
+    user_answer: |
+      1. khi gõ /init-knowledge thì nó chạy luồng tạo Project Knowledge ban đầu
+      (create-project-knowledge.md)
+      2. Để improve luồng slack, hiện sau khi chạy new-project xong thì không có cách gì để khởi
+      tạo knowledge mà phải clone local để khởi tạo. https://github.com/thanhpd56/control-plane
+      3. Tự Tạo 1 issue mới trên github, rồi bắt đầu luồng hỏi đáp. Ngoài ra cũng có thể thông qua
+      slash command của slack
+      4. tự động chạy luôn
+
+  - asked_at: "2026-10-04 00:20:00"
+    topic_keys: ["constraints", "integration_points", "technical_decisions"]
+    agent_questions: |
+      5. Phạm vi áp dụng: cơ chế issue-driven qua GitHub Actions chỉ áp dụng cho repo vừa mới
+      bootstrap (/new-project), hay cũng áp dụng cho repo đã tồn tại từ trước?
+      6. Kết quả (Project Knowledge) nên commit thẳng vào main (giống finalize stage) hay qua PR?
+      7. Dùng label riêng (vd knowledge-init) để phân biệt issue init-knowledge với issue
+      /new-feature, và online-pipeline-userspec.yml bỏ qua issue mang label này — đồng ý cách này?
+      8. Phạm vi user-spec: gồm cả phần control-plane (bootstrap-project.yml + Slack slash
+      command), hay tách riêng?
+    user_answer: |
+      5. Tạm thời chỉ project mới đi.
+      6. commit thẳng
+      7. dùng lable.
+      8. gồm cả control-plane.
+
+  - asked_at: "2026-10-04 00:40:00"
+    topic_keys: ["technical_decisions", "integration_points"]
+    agent_questions: |
+      9. Mọi checkpoint "user đồng ý" của create-project-knowledge.md khi chạy qua GitHub Actions
+      post gh issue comment + dừng, resume ở comment tiếp theo — như userspec-turn, không cần
+      literal signal tự động nào. Đồng ý?
+      10. Idempotency: dùng interview_metadata.status: completed (đã có sẵn trong
+      work/project-knowledge/interview.yml) làm marker "đã xong" — giống finalize check
+      work/completed/$SLUG. Đồng ý?
+      11. Đặt tên: label "knowledge-init", stage "knowledge-init", workflow file
+      online-pipeline-knowledge-init.yml. OK?
+      12. Stage tự commit thẳng main khi xong (không hỏi gì thêm) — đúng không? Sau khi commit có
+      tự đóng issue luôn không?
+    user_answer: |
+      9 ok
+      10 ok
+      11 ok
+      stag tự làm, commit xong thì đóng issue luôn.
+
+  - asked_at: "2026-10-04 00:50:00"
+    topic_keys: ["edge_cases", "error_scenarios", "verification_strategy", "testing_strategy"]
+    agent_questions: |
+      13. bootstrap-project.yml mở Slack thread bằng cách gọi /relay post 1 message mới (không
+      thread_ts) vào channel, lấy ts của message đó làm thread_ts, nhúng vào body issue
+      knowledge-init trước khi tạo issue. Chi tiết /relay trả ts hay cần sửa Worker để trả: ghi
+      là technical decision cần làm rõ khi code bên control-plane, không chốt cứng ở user-spec.
+      Đồng ý hướng này?
+      14. Retry/lỗi: theo đúng pattern đã có (2 lần retry rồi báo lỗi qua gh issue comment +
+      Slack, không tự đóng issue, không rollback) giống implement/finalize. Đồng ý?
+      15. Kiểm thử tối thiểu: (a) /init-knowledge interactive local; (b) end-to-end Slack
+      /new-project → issue tự xuất hiện → câu hỏi lên GitHub+Slack → trả lời → hoàn tất → commit
+      thẳng main + issue tự đóng. Thêm case nào khác không?
+      16. Slash command Slack chỉ là backup/manual-retry cho đúng project mới vừa bootstrap
+      (không áp dụng cho repo cũ) — đúng không?
+    user_answer: |
+      13 ok
+      14 ok
+      15 đủ rồi
+      16. đúng.
+
+  - asked_at: "2026-10-04 01:00:00"
+    topic_keys: ["constraints", "technical_decisions", "feature_description"]
+    agent_questions: |
+      Completeness-checker surfaced 3 gaps:
+      1. finalize commits once (single-shot); knowledge-init is multi-turn across separate
+      Actions runs with no disk continuity — where does interview.yml state live between turns
+      if "commit straight to main, no branch, no PR" is kept? Proposed: every turn commits
+      interview.yml straight to main (no branch ever); the final turn additionally commits the
+      written Project Knowledge files and closes the issue. Agree?
+      2. The Slack slash command's only real precondition ("channel already linked to a repo")
+      is identical to /new-feature's — nothing stops it from being run against an old, already
+      -documented repo, contradicting "new-repo-only". Proposed: block re-run when
+      interview_metadata.status is already completed, erroring out instead. Agree?
+      3. create-project-knowledge.md's last step says "Return to Documentation Review in the
+      main skill" — a menu-navigation instruction that makes no sense inside a non-interactive
+      automated stage. Proposed: the automated stage skips that instruction entirely and just
+      stops (commit + close issue) instead. Agree?
+    user_answer: |
+      1 ok
+      2. áp dụng cả project cũ nữa càng tốt. ko vấn đề hay phải báo lỗi
+      3 ok
+
+  - asked_at: "2026-10-04 01:10:00"
+    topic_keys: ["constraints", "technical_decisions", "testing_strategy", "migration_needs", "edge_cases"]
+    agent_questions: |
+      Re-check surfaced the previous answer's actual mechanics gap: create-project-knowledge.md
+      itself only applies "when the current documentation is missing, still a template, or only
+      partially filled" (its own opening line) — an already-complete repo routes to
+      documentation-writing's structurally different single-pass "full update/audit" mode, which
+      the whole turn/commit/label/close design was never built for.
+      17. Clarifying "áp dụng cho project cũ": does this mean "old repos that still need initial
+      creation" (same missing/template/partial precondition, just lifting the
+      just-bootstrapped-only timing), not "also re-run a full audit on already-complete repos"?
+      Proposed concrete behavior for the already-complete case: the stage posts a short
+      "already initialized" comment and closes the issue immediately (informational no-op, not
+      a retryable failure) — reusing the existing missing/template/partial check, no new
+      validation framework. Agree?
+      18. Fix testing_strategy/migration_needs, which still say "retrofit out of scope" —
+      contradicts the lift. Add one more manual test case: slash command against an old repo
+      that still lacks Project Knowledge. OK?
+      19. Concurrent runs: if the manual command is invoked twice for the same repo while an
+      interview is already in_progress (an open knowledge-init issue already exists), check for
+      an existing open "knowledge-init" issue first and skip creating a second one (report that
+      one already exists) rather than accepting duplicate issues/threads as a rare risk. OK?
+    user_answer: "đồng ý."
+  feature_name:
+    score: 90
+    value: "/init-knowledge — trigger phrase that starts initial Project Knowledge creation."
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 75
+    value: |
+      Two bundled parts, same pattern as the completed slack-pipeline-interaction feature:
+      (A) molyanov-ai-dev: add "/init-knowledge" as an interactive trigger phrase in
+      documentation-writing/SKILL.md that runs the existing initial-creation flow
+      (create-project-knowledge.md) directly. Also add a new online-pipeline stage/workflow,
+      vendored into every new-project scaffold, that is triggered by a GitHub issue carrying a
+      dedicated label (e.g. "knowledge-init") and drives the same create-project-knowledge.md
+      interview turn-by-turn via issue comments (reusing the relay_to_slack mirror so Slack stays
+      in sync), committing the result straight to main when done (no PR).
+      (B) control-plane (separate repo, github.com/thanhpd56/control-plane, not yet cloned
+      locally): after bootstrap-project.yml's existing secret-vendoring step succeeds for a brand
+      new repo, automatically create a GitHub issue with the "knowledge-init" label on that new
+      repo to kick off the flow from part A (opening a fresh Slack message via /relay first to
+      mint a thread_ts, since no thread exists yet at that point). Also add a new Slack slash
+      command (name TBD, working name /init-knowledge) on the Worker — general-purpose, usable
+      for any channel already linked to a repo (new or old), that does the same thing manually
+      (ACK <3s, open thread, create the labeled issue, relay the first question) — same shape as
+      the existing /new-feature command. Re-running it against a repo whose Project Knowledge is
+      already complete is not an error.
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 90
+    value: |
+      After /new-project succeeds through the Slack bootstrap flow, there is currently no way to
+      initialize the new repo's Project Knowledge without cloning it locally and running
+      documentation-writing by hand — defeating the "0 manual local step" promise /new-project
+      already makes for repo creation itself.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 70
+    value: "The user themself (repo owner) bootstrapping new projects via Slack /new-project."
+    gaps: []
+    required: false
+
+  success_criteria:
+    score: 90
+    value: |
+      Right after /new-project finishes bootstrapping a brand-new repo (Slack flow) and
+      bootstrap-project.yml finishes vendoring secrets, a "knowledge-init" labeled GitHub issue
+      appears automatically on the new repo; its Slack marker already carries the thread_ts of a
+      freshly opened Slack message (posted via /relay with no thread_ts, i.e. a new top-level
+      channel message that becomes the thread root). The first interview question from
+      create-project-knowledge.md appears both as a GitHub issue comment and in that Slack
+      thread, with zero local clone needed. Every subsequent checkpoint/question round-trips the
+      same way. On completion, the "knowledge-init" stage commits the filled Project Knowledge
+      straight to main and closes the issue — no PR, no further manual step. Separately, typing
+      "/init-knowledge" in any interactive local session runs create-project-knowledge.md
+      directly (existing behavior, just reachable via this new named trigger).
+    gaps: []
+    required: true
+
+  constraints:
+    score: 95
+    value: |
+      Automatic trigger (issue auto-created right after a fresh /new-project bootstrap) is
+      inherently new-repo-only — it fires once per bootstrap event. The manual Slack slash
+      command is usable on any repo already linked in Slack, new or old, as long as its Project
+      Knowledge is still missing/template/partial (create-project-knowledge.md's own stated
+      precondition) — it lifts the "must be freshly bootstrapped" timing restriction, not the
+      underlying precondition. If invoked on a repo whose Project Knowledge is already complete,
+      the stage does not error or retry: it posts a short "already initialized" comment and
+      closes the issue immediately (informational no-op). If an open "knowledge-init" issue
+      already exists for that repo (interview in_progress), the command does not create a
+      second one — it reports that one already exists.
+      Every turn of the knowledge-init stage (including the 3 cycle-end "user agrees"
+      checkpoints) round-trips via gh issue comment / Slack reply exactly like a normal
+      question — no new automation-skip signal. No branch is ever used for this flow: every
+      turn commits work/project-knowledge/interview.yml straight to main so progress survives
+      between separate Actions runs; the final turn additionally commits the written Project
+      Knowledge files and closes the issue — no PR at any point.
+      Label "knowledge-init" distinguishes the issue from a /new-feature issue;
+      online-pipeline-userspec.yml's route job must ignore issues carrying this label (same as
+      "local-placeholder"). The automated stage must skip create-project-knowledge.md's "Return
+      to Documentation Review in the main skill" instruction — it just stops after commit +
+      issue close. Idempotency/completion marker: the existing
+      interview_metadata.status: completed field. Failure handling follows the existing
+      2-retry-then-report pattern (gh issue comment + relay_to_slack), no rollback, issue stays
+      open on failure.
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 85
+    value: |
+      Manual verification only (infra/workflow feature, no app-level unit tests apply):
+      (1) Interactive: say "/init-knowledge" in a local Claude Code session on a project with
+      Project Knowledge missing/template — confirm create-project-knowledge.md's Phase 0 starts
+      directly, no extra routing step needed.
+      (2) End-to-end through Slack: run /new-project in a linked Slack channel against the
+      user's real GitHub account (per existing precedent in slack-pipeline-interaction's own
+      verification) — confirm (a) new repo created as before, (b) a "knowledge-init" labeled
+      issue appears automatically after secret vendoring, (c) its first interview question
+      appears both as a GitHub issue comment and as a new Slack thread, (d) answering in Slack or
+      on GitHub advances the interview identically, (e) on completion Project Knowledge is
+      committed straight to main with no PR, and the issue is closed.
+      (3) Manual Slack slash command path as a backup trigger for the same new-repo case.
+      (4) Manual slash command run against an old, pre-existing repo whose Project Knowledge is
+      still missing/template/partial — confirm it triggers the same flow as the automatic path.
+      Out of scope for any test: retrofitting a repo whose Project Knowledge is already complete
+      into a full re-audit — that case only gets the lightweight "already initialized" close.
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 85
+    value: |
+      1. Interactive local: user types "/init-knowledge" on a project missing/partial Project
+      Knowledge → create-project-knowledge.md's interview starts directly.
+      2. Slack, fully automatic: user runs "/new-project my-repo" in a linked Slack channel →
+      repo is created as today → bootstrap-project.yml vendors secrets as today → a
+      "knowledge-init" issue appears on the new repo, Slack thread opens automatically → user
+      answers the 3-cycle interview from Slack (or GitHub) → Project Knowledge lands on main,
+      issue closes, no local clone ever needed.
+      3. Slack, manual trigger: user runs a Slack slash command on any repo already linked in
+      Slack whose Project Knowledge is still missing/template/partial — a just-bootstrapped repo
+      where automatic issue creation failed, or any older pre-existing repo that never got
+      Project Knowledge set up. Same create-project-knowledge.md flow as the automatic path, just
+      triggered later/by hand. If that repo's Project Knowledge is already complete, the command
+      gets an immediate "already initialized" close, not an error. If an interview is already
+      in_progress for that repo, the command reports that instead of starting a second one.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 85
+    value: |
+      - Typing "/init-knowledge" in an interactive session with missing/template/partial Project
+        Knowledge starts create-project-knowledge.md's Phase 0 directly.
+      - After a real Slack /new-project run completes bootstrap + secret vendoring, a GitHub
+        issue labeled "knowledge-init" exists on the new repo with the Slack marker line
+        pointing at a real thread_ts; a message appears in a new Slack thread in the triggering
+        channel with the first interview question; the same question is also a GitHub issue
+        comment.
+      - Replying in Slack or commenting on GitHub advances the same interview turn-by-turn,
+        including the 3 cycle-end checkpoints.
+      - Every intermediate turn commits the updated work/project-knowledge/interview.yml
+        straight to main (no branch); on completion, the written Project Knowledge files are
+        committed to main as well (still no PR), and the "knowledge-init" issue is closed.
+      - online-pipeline-userspec.yml's route job does not react to "knowledge-init"-labeled
+        issues/comments (no duplicate/competing run).
+      - The automatic trigger only ever fires right after a fresh /new-project bootstrap — a
+        pre-existing repo is never auto-targeted.
+      - The manual Slack slash command works on any linked repo, old or new, whose Project
+        Knowledge is still missing/template/partial; running it against a repo whose Project
+        Knowledge is already complete gets an immediate "already initialized" issue close, not
+        an error; running it against a repo with an interview already in_progress reports that
+        instead of creating a duplicate issue/thread.
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 75
+    value: |
+      - bootstrap-project.yml's secret-vendoring step itself fails: no "knowledge-init" issue is
+        created (issue creation is strictly after that success path) — same as today's existing
+        "no rollback, report error" behavior.
+      - A comment lands on an already-closed "knowledge-init" issue (race or accident): the
+        workflow's route job must not re-dispatch a finished flow — idempotency marker
+        (interview_metadata.status: completed) plus normal closed-issue handling covers this.
+      - Two runs could race on committing to main: follow finalize's existing concurrency-group
+        pattern to serialize knowledge-init runs the same way.
+      - Interview resumes correctly if a run crashes mid-cycle, since
+        work/project-knowledge/interview.yml already persists cycle/question state (existing
+        create-project-knowledge.md behavior, unchanged) and is committed to main every turn.
+      - Manual slash command invoked on a repo whose Project Knowledge is already complete:
+        not an error — immediate "already initialized" comment + issue close, no interview
+        started.
+      - Manual slash command invoked on a repo that already has an open "knowledge-init" issue
+        (interview in_progress): no second issue/thread created; reports the existing one
+        instead.
+      - create-project-knowledge.md's own final-step instruction to "Return to Documentation
+        Review in the main skill" is explicitly skipped by the automated stage — it stops right
+        after the completion commit and issue close instead.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 80
+    value: |
+      claude -p crash or tool error inside the knowledge-init stage: workflow retries up to 2
+      times, then reports technical failure via gh issue comment + relay_to_slack (same pattern
+      as implement/finalize), issue stays open, no rollback of partial Project Knowledge commits.
+      Worker-side /relay failure when opening the initial Slack message: bootstrap-project.yml
+      still creates the GitHub issue (GitHub side must not depend on Slack succeeding) but the
+      Slack marker is simply absent in that case, so later relay_to_slack calls no-op exactly
+      like any non-Slack-onboarded repo already does today.
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 85
+    value: |
+      Manual verification (see testing_strategy for the exact steps): local interactive trigger,
+      then a real end-to-end Slack /new-project run against the user's own GitHub account
+      (matching how slack-pipeline-interaction itself was verified), checking both the GitHub
+      issue/comments and the Slack thread render identically at each step, and that main gets the
+      expected commit with the issue closed at the end.
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    value: ""
+    gaps: []
+    required: false
+
+  risks:
+    score: 75
+    value: |
+      - Cross-repo feature: the control-plane half can't be implemented or tested from this
+        working directory — requires cloning github.com/thanhpd56/control-plane separately
+        during implementation. Mitigation: user-spec documents both halves; implementation
+        explicitly clones that repo as a distinct step.
+      - create-project-knowledge.md was never designed with any GitHub-Actions/turn-based
+        execution in mind; driving its 3-cycle, multi-checkpoint interview through issue comments
+        is new ground with no existing automated precedent to copy byte-for-byte (unlike
+        Feature Finalization Mode's single ONLINE_PIPELINE_AUTOMATED skip). Mitigation: no new
+        automation signal is introduced — every checkpoint just becomes a normal round-tripped
+        question, which the generic userspec-turn-style transformation already supports.
+      - relay_to_slack has no shared script today (duplicated bash in 4+ places); this feature
+        adds at least one more copy rather than fixing that debt — accepted, out of scope here.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 90
+    value: |
+      - Reuse interview_metadata.status: completed (existing field) as the idempotency/
+        completion marker instead of inventing a new one; the manual command checks it before
+        starting a new interview — "already initialized" gets an immediate informational close,
+        not a re-run of the full interview.
+      - No dedicated branch for this flow, ever. Every turn commits
+        work/project-knowledge/interview.yml straight to main; the final turn also commits the
+        written Project Knowledge files, then closes the issue. This differs from finalize
+        (single commit, single run) precisely because knowledge-init is multi-turn.
+      - Label "knowledge-init" created defensively at first point of use inside
+        bootstrap-project.yml's issue-creation call, following the same defensive-create idiom
+        already used for "local-placeholder"/"userspec-spec"/"userspec-implement".
+      - No new ONLINE_PIPELINE_AUTOMATED-style signal for create-project-knowledge.md — every
+        checkpoint just round-trips as a normal question; the automated stage explicitly skips
+        create-project-knowledge.md's final "return to main skill" navigation instruction.
+      - The manual Slack slash command drops the "just-bootstrapped-only" timing restriction but
+        keeps create-project-knowledge.md's own precondition (missing/template/partial Project
+        Knowledge) — it is not a generic "run documentation-writing on demand" command. Already-
+        complete repos get an immediate informational close, not a retryable failure. An already
+        in_progress repo (open "knowledge-init" issue exists) gets a "already running" report
+        instead of a duplicate issue/thread.
+      - Exact /relay response shape for obtaining a fresh thread_ts is deferred to control-plane
+        implementation time (Worker source not available in this working directory).
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 70
+    value: |
+      No new secrets beyond what slack-pipeline-interaction already vendors (GH_PAT, Claude
+      auth, SLACK_RELAY_TOKEN/SLACK_WORKER_URL). New GitHub label and workflow file are vendored
+      automatically as part of the existing project-initialization scaffold / vendor-skills.sh
+      update — no extra manual step for the end user beyond what /new-project already requires.
+    gaps: []
+    required: false
+
+  manual_user_actions:
+    score: 70
+    value: |
+      None for the primary automatic path. The Slack slash command exists as a general-purpose
+      manual trigger: a backup for a just-bootstrapped repo if automatic issue creation failed,
+      or a deliberate way to (re-)run documentation-writing against any older linked repo.
+    gaps: []
+    required: false
+
+integration:
+  integration_points:
+    score: 90
+    value: |
+      molyanov-ai-dev side: documentation-writing/SKILL.md (new "/init-knowledge" trigger
+      phrase), online-pipeline/SKILL.md (new "knowledge-init" stage + Naming Contract additions:
+      "knowledge-init" label, new workflow file name), a new
+      online-pipeline-knowledge-init.yml workflow asset vendored in both locations inside
+      project-initialization/assets/new-project/ (.github/workflows/ and
+      .claude/skills/online-pipeline/assets/workflows/), vendor-skills.sh's WORKFLOWS array
+      updated to include it, online-pipeline-userspec.yml's route job gains a second label-skip
+      check for "knowledge-init" alongside the existing "local-placeholder" check.
+      control-plane side (separate, not-yet-cloned repo): bootstrap-project.yml gains a step
+      after its existing secret-vendoring success path that opens a Slack message via /relay (no
+      thread_ts) to mint a thread_ts, then gh label create (defensive) + gh issue create with
+      the Slack marker and "knowledge-init" label on the new repo. Worker gains a new manual
+      slash command mirroring this same sequence as a backup trigger.
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 60
+    value: |
+      Depends on existing online-pipeline infrastructure (relay_to_slack, Naming Contract,
+      vendor-skills.sh), documentation-writing's create-project-knowledge.md flow, and the
+      already-completed slack-pipeline-interaction feature (Worker, bootstrap-project.yml,
+      SLACK_RELAY_TOKEN/SLACK_WORKER_URL secrets).
+    gaps: []
+    required: false
+
+  technical_constraints:
+    score: 50
+    value: |
+      Must not change any workflow YAML's `on:` trigger shape beyond what's already established
+      (new workflow file gets its own `issues`/`issue_comment` triggers filtered by the
+      "knowledge-init" label, following the existing pattern — no change to the other three
+      workflow files' triggers).
+    gaps: []
+    required: false
+
+  data_requirements:
+    score: 0
+    value: "N/A — no new data store; reuses existing work/project-knowledge/interview.yml and Project Knowledge files."
+    gaps: []
+    required: false
+
+  migration_needs:
+    score: 60
+    value: |
+      The automatic post-bootstrap trigger only ever targets brand-new repos. The manual Slack
+      slash command may also target a pre-existing repo that predates this feature, as long as
+      its Project Knowledge is still missing/template/partial — same create-project-knowledge.md
+      flow, just invoked later than right-after-bootstrap. No migration of already-complete
+      Project Knowledge is in scope.
+    gaps: []
+    required: false
+
+notes: |
+  Settled final scope after two completeness-checker passes:
+
+  - Automatic trigger (right after a fresh /new-project Slack bootstrap): new-repo-only,
+    inherent to firing once per bootstrap event. Unchanged since the first interview batch.
+  - Manual Slack slash command: lifts the "must be freshly bootstrapped" TIMING restriction
+    only. It keeps create-project-knowledge.md's own stated precondition verbatim — "documentation
+    is missing, still a template, or only partially filled" — so it also works on an old,
+    pre-existing repo that never got Project Knowledge set up, but is NOT a generic "trigger
+    documentation-writing on demand" command and does not drive the structurally different
+    single-pass "full update/audit" mode.
+  - Already-complete repo: immediate "already initialized" comment + issue close (informational
+    no-op, not a retryable failure, no new validation framework — reuses the existing
+    missing/template/partial check).
+  - Already in_progress repo (open "knowledge-init" issue exists): report that one already
+    exists instead of creating a second issue/thread.
+
+  This resolves (in order of discovery): the finalize-vs-multi-turn persistence contradiction
+  (resolved: every turn commits interview.yml straight to main, no branch, ever), the
+  unenforced new-repo-only boundary on the manual command (resolved: scope lifted deliberately,
+  not enforced as a block), the "return to main skill" navigation step (resolved: automated
+  stage skips it and just stops), and finally the mechanics gap the scope lift itself exposed
+  (resolved via the already-complete / already-in_progress behaviors above).
