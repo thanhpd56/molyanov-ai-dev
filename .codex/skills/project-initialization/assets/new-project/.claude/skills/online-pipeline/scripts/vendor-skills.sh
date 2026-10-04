@@ -26,7 +26,7 @@ set -euo pipefail
 
 SKILLS=(user-spec-planning code-writing documentation-writing test-master online-pipeline)
 AGENTS=(code-researcher interview-completeness-checker skeptic userspec-quality-validator userspec-adequacy-validator code-reviewer security-auditor test-reviewer documentation-reviewer)
-WORKFLOWS=(online-pipeline-userspec.yml online-pipeline-implement.yml online-pipeline-finalize.yml)
+WORKFLOWS=(online-pipeline-userspec.yml online-pipeline-implement.yml online-pipeline-finalize.yml online-pipeline-knowledge-init.yml)
 
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   CHECK_PATHS=()

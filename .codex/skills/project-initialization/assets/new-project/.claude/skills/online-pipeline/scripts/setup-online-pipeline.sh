@@ -42,6 +42,13 @@ if ! gh label list --json name -q '.[].name' 2>/dev/null | grep -qx "local-place
   echo "Created label: local-placeholder"
 fi
 
+# --- Create the label bootstrap-project.yml / the manual Slack slash command apply to a
+# knowledge-init issue (see online-pipeline/SKILL.md Naming Contract) ---
+if ! gh label list --json name -q '.[].name' 2>/dev/null | grep -qx "knowledge-init"; then
+  gh label create "knowledge-init" --description "online-pipeline" --color "FBCA04" || true
+  echo "Created label: knowledge-init"
+fi
+
 # --- Offer to set secrets ---
 echo ""
 echo "online-pipeline needs these repo secrets:"

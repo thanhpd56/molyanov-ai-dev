@@ -79,6 +79,13 @@ jobs:
             exit 0
           fi
 
+          if printf '%s' "$ISSUE_LABELS_JSON" | jq -e 'index("knowledge-init") != null' >/dev/null; then
+            # This issue belongs to online-pipeline-knowledge-init.yml's stage, not this pipeline —
+            # never dispatch user-spec-planning onto it.
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           SLUG="$(slugify "$ISSUE_TITLE")-${ISSUE_NUMBER}"
           BRANCH="userspec/$SLUG"
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"

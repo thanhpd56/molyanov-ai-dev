@@ -60,6 +60,13 @@ scheme:
   appears inside `userspec-turn` and `finalize` prompts, never `implement`/`implement-resume`);
   `/switch-online` is read by the `userspec-turn` and `implement-resume` stage prompts themselves,
   not by any route job — route jobs never need to read comment content to dispatch correctly.
+- `knowledge-init` label: applied only to the GitHub issue (never a PR) that drives Stage:
+  knowledge-init below — by `bootstrap-project.yml` in the separate `control-plane` repo right
+  after it vendors secrets onto a freshly bootstrapped repo, or by a manual Slack slash command on
+  an existing repo. Created defensively wherever it's applied, exactly like
+  `local-placeholder`/`userspec-spec`/`userspec-implement`. The route job in
+  `online-pipeline-userspec.yml` ignores any issue/comment carrying it, the same way it already
+  ignores `local-placeholder` — the two labels never dispatch to the same stage.
 - Slack mapping marker (only present on a feature started via Slack's `/new-feature`, see Slack
   Bridge below): the first line of the issue body, exactly
   `<!-- slack: channel_id={channel_id} thread_ts={thread_ts} -->`. A feature started any other way
@@ -167,6 +174,9 @@ skill already calls `gh issue comment`:**
 - The workflow's own "Report technical failure" steps in `online-pipeline-implement.yml` and
   `online-pipeline-finalize.yml`, after 3 failed attempts — these already call `gh issue comment`
   today; Slack gets the identical message, not a special case.
+- Stage `knowledge-init` steps 1, 3, and 4 (already-complete short-circuit, interview
+  question/checkpoint, and completion message), and `online-pipeline-knowledge-init.yml`'s own
+  "Report technical failure" step, after 3 failed attempts — same shape as the two bullets above.
 
 **The one exception — Slack-only, no GitHub equivalent:** when `finalize` completes successfully,
 `online-pipeline-finalize.yml` posts "✅ Feature xong" (or equivalent) via `relay_to_slack` only.
@@ -283,6 +293,65 @@ on `main` directly — there is no branch for this stage.
    checkout, no reset needed. If it fails after push (e.g. the connection drops right after), the
    next run's `work/completed/{slug}/` existence check (done by the workflow, not by you) already
    detects completion and skips re-running you; you do not need your own idempotency check.
+
+### Stage: knowledge-init
+
+Triggered once per issue comment (or once on issue open) by
+`online-pipeline-knowledge-init.yml`, for any issue carrying the `knowledge-init` label. Runs on
+`main` directly — there is no branch for this stage, and no feature slug; it drives
+`documentation-writing`'s initial-documentation flow for the whole repository, not a single
+feature.
+
+1. Always start by running `create-project-knowledge.md`'s Phase 0 (Start or Resume), regardless of
+   how many times this stage has already run for this issue. Phase 0's own repository/
+   configuration/`CLAUDE.md`/current-Project-Knowledge inspection is the decisive completion check
+   in this automated context: if that inspection shows Project Knowledge is no longer missing, a
+   template, or only partially filled — whether because this very flow already finished it, a
+   `documentation-writing` full update/audit completed it, or someone edited it by hand — skip the
+   interview entirely. Post "Project Knowledge đã được khởi tạo rồi." (or equivalent) with `gh issue
+   comment {issue_number}`, mirror it with `relay_to_slack` (Slack Bridge above), then call `gh
+   issue close {issue_number}` yourself. Only after that, unconditionally — create
+   `work/project-knowledge/interview.yml` with `interview_metadata.status: completed` if it does
+   not exist yet, or otherwise just refresh its `interview_metadata.last_updated` timestamp even
+   when `status` already reads `completed` and nothing else about it needs to change — and commit
+   that file straight to `main` and push **as the last action of this run** (so Worker's own cheap
+   check in `control-plane`, which only reads this field, can see the repo is done too). Every hit
+   of this shortcut must produce a real commit, with no exception — including a repeat hit on a
+   reopened issue or a stray comment arriving after the issue is already closed — so the workflow's
+   retry loop (which only trusts a landed commit, never issue/comment state, to tell a correct
+   repeat from a crash) always sees one. Do not reverse this order: commit+push is always the last
+   action, exactly like step 3 below — never close or comment after it. This check never trusts
+   `interview_metadata.status` alone for the *decision* to skip the interview, since a repo can
+   reach full Project Knowledge through routes that never set that field — only for what to write
+   once the decision is already made from the real inspection above.
+2. Otherwise, continue `create-project-knowledge.md` exactly as written, from whatever point its
+   own Phase 0 resume logic lands on, using the first run's issue body (strip the Slack mapping
+   marker line first, see Naming Contract) or the latest issue comment supplied in the prompt as
+   the newest user input, the same way `userspec-turn` treats these two sources.
+3. Every point where `create-project-knowledge.md` asks the user anything — a question batch, a
+   cycle checkpoint, the final-summary checkpoint, the documentation-approval checkpoint — post it
+   with `gh issue comment {issue_number}` instead of chat output, then call `relay_to_slack` (Slack
+   Bridge above) with the same text, then commit `work/project-knowledge/interview.yml` (and
+   nothing else) straight to `main` and push as the last action of this run, then exit 0. Do not
+   invent any literal signal to skip or auto-confirm a checkpoint — every one of them round-trips
+   through a real comment, exactly like `userspec-turn`'s questions.
+4. When "Write the Documentation" finishes and the user has approved it: write the real Project
+   Knowledge files in the working tree and set `interview_metadata.status: completed`, then post
+   the completion comment with `gh issue comment {issue_number}`, mirror it with `relay_to_slack`,
+   then call `gh issue close {issue_number}` yourself. Only after all of that, run
+   `~/.claude/scripts/sync-to-codex.sh --project "$PWD" --apply` (this turn always touches
+   `.claude/**`/`CLAUDE.md`, same requirement as `documentation-writing/SKILL.md`'s Manual Project
+   Documentation Sync) and commit everything — the Project Knowledge files plus generated
+   `.codex/**`/`AGENTS.md` output — straight to `main` and push **as the last action of this run**;
+   do not open a PR or any branch, and do not comment/relay/close after this commit. Skip
+   `create-project-knowledge.md`'s own "Return to Documentation Review in the main skill" step
+   entirely in this automated context — stop right after that final commit instead of returning to
+   that menu.
+5. Any run that crashes or exits without the commit and/or issue-close described above is a
+   technical failure. The workflow retries it (reset to `origin/main`, try again) up to twice, then
+   reports the error via `gh issue comment` + `relay_to_slack` and leaves the issue open — it never
+   rolls back `main`. This mirrors `finalize`'s retry loop, not `implement`'s branch-reset one,
+   since both stages work straight on `main` with no branch of their own.
 
 ## Hybrid Local/Online Switch (local-facing)
 

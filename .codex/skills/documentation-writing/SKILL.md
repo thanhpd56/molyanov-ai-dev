@@ -20,7 +20,10 @@ Create and maintain `.claude/skills/project-knowledge/` from the evidence source
 Outside Feature Finalization Mode, follow
 [create-project-knowledge.md](references/create-project-knowledge.md) when the user starts or
 continues initial documentation and either its interview is still in progress or Project Knowledge
-is missing, still a template, or only partially filled. Apply
+is missing, still a template, or only partially filled. The phrase `/init-knowledge` is a direct
+trigger for this: when the user types it, start create-project-knowledge.md's Phase 0 immediately,
+without any additional evidence-source routing — the same way `/done` (Phase 1 item 6 below) routes
+straight to Feature Finalization Mode. Apply
 [project-knowledge-structures.md](references/project-knowledge-structures.md) for content ownership
 and structure. After writing, run the manual sync and continue at Documentation Review.
 
