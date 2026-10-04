@@ -33,6 +33,7 @@ tmp/
 # System
 .DS_Store
 *.lock
+.idea/
 
 # Local settings
 settings.json
