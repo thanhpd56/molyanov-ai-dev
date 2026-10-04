@@ -59,10 +59,17 @@ scheme:
   appears inside `userspec-turn` and `finalize` prompts, never `implement`/`implement-resume`);
   `/switch-online` is read by the `userspec-turn` and `implement-resume` stage prompts themselves,
   not by any route job — route jobs never need to read comment content to dispatch correctly.
+- Slack mapping marker (only present on a feature started via Slack's `/new-feature`, see Slack
+  Bridge below): the first line of the issue body, exactly
+  `<!-- slack: channel_id={channel_id} thread_ts={thread_ts} -->`. A feature started any other way
+  (a plain issue, or the local-placeholder flow) never has this line — that absence is exactly how
+  the relay helper below detects "this repo/feature has no Slack thread to mirror into."
 
 The agent communicates with the user exclusively through `gh issue comment {issue_number} --body
 "..."` — chat/stdout output is not read by anyone in a CI job. Every stage prompt supplies the
-issue number explicitly; use it for every comment.
+issue number explicitly; use it for every comment. On a repo onboarded to Slack (see Slack Bridge
+below), every one of these calls must be mirrored to the Slack thread through the `relay_to_slack`
+helper, with one documented exception — do not invent others.
 
 ## Why Skills Must Be Vendored Into the Target Repo
 
@@ -108,6 +115,76 @@ only the secrets and the manual browser steps remain. That vendored snapshot can
 the same way an existing project's can, so `scripts/vendor-skills.sh` (already present at
 `.claude/skills/online-pipeline/scripts/` in a scaffolded project) is the update path there too.
 
+## Slack Bridge (Online Pipeline over Slack)
+
+Optional, additive layer: a repo that has never run this (no `SLACK_RELAY_TOKEN`/`SLACK_WORKER_URL`
+secrets set) behaves exactly as before — GitHub issue/PR comments only. A repo that has it gets
+every GitHub-side interaction mirrored into a Slack thread, driven by one account-wide Cloudflare
+Worker (source lives in a separate `control-plane` repo, never in this one — see
+`work/slack-pipeline-interaction/user-spec.md` and that repo's own `README.md` for the Worker's
+own setup and request-routing logic; this section only covers what *this* skill's stages do).
+
+**No `on:` trigger changes.** All three workflow YAMLs keep the exact triggers they already have.
+The Worker drives interaction by calling the GitHub REST API directly (create issue, post
+`/approve` comment, merge a PR) or by relaying into Slack — it never needs a new GitHub Actions
+event to fire any of this.
+
+**`relay_to_slack` — the one mirror helper, used identically from a stage prompt's own bash and
+from a workflow YAML step:**
+
+```bash
+relay_to_slack() {
+  local issue_number="$1" text="$2"
+  if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+    return 0  # repo never onboarded Slack — not an error, just nothing to do
+  fi
+  local issue_body channel_id thread_ts
+  issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+  channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+  thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+  if [ -z "$channel_id" ]; then
+    return 0  # this feature has no Slack thread (started directly on GitHub, or local-placeholder)
+  fi
+  curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+    -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+    -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+          '{channel_id:$c, thread_ts:$t, text:$x}')" || true  # relay failure must never fail the run
+}
+```
+
+`SLACK_RELAY_TOKEN` and `SLACK_WORKER_URL` are repo secrets set by the (now Slack-aware)
+`setup-online-pipeline.sh`; both workflow jobs that run `claude -p` export them so a stage prompt's
+own bash can call this helper, exactly like it already calls `gh issue comment`.
+
+**Mirror points — call `relay_to_slack` immediately after, with the same text, at every point this
+skill already calls `gh issue comment`:**
+
+- Stage `userspec-turn` step 4 (interview question / `awaiting_decision` stop).
+- Stage `implement` / `implement-resume` step 2 (`awaiting_decision` question or finding).
+- The workflow's own "Open or update the spec PR" step's closing `gh issue comment` (spec PR ready,
+  `/approve` instructions) — in `online-pipeline-userspec.yml`.
+- The workflow's own "Report technical failure" steps in `online-pipeline-implement.yml` and
+  `online-pipeline-finalize.yml`, after 3 failed attempts — these already call `gh issue comment`
+  today; Slack gets the identical message, not a special case.
+
+**The one exception — Slack-only, no GitHub equivalent:** when `finalize` completes successfully,
+`online-pipeline-finalize.yml` posts "✅ Feature xong" (or equivalent) via `relay_to_slack` only.
+There is no matching `gh issue comment` call for this (the GitHub issue is simply closed/archived
+by the finalize commit) and none should be added — this is the single net-new capability in this
+mirror set, not a gap to "fix" by also adding a GitHub-side post.
+
+**`!approve` and new-feature/new-project creation are entirely Worker-side**, not something any
+stage prompt here does: the Worker computes `slug` from `issue.title` + `issue.number` using the
+exact same formula as this file's Naming Contract, looks up the two possible open PRs
+(`userspec/{slug}`, `feature/{slug}`), and either posts the real `/approve` comment (spec PR — the
+existing route job in `online-pipeline-userspec.yml` handles it unchanged) or calls the merge REST
+endpoint directly (code PR — new capability, no workflow trigger needed since
+`pull_request: closed` doesn't distinguish merge actor/method). The Worker also filters out any
+Slack event carrying `bot_id` before treating it as a relay candidate or an `!approve`, so its own
+posts into a thread never loop back as a duplicate `gh issue comment` or a spurious approve. None
+of this is implemented in this skill or these workflows — it lives entirely in the control-plane
+repo's Worker source.
+
 ## Stages
 
 ### Stage: userspec-turn
@@ -120,7 +197,9 @@ Triggered once per issue comment (or once on issue open) by `online-pipeline-use
    completion (leave it `in_progress` in that case).
 2. If `work/{slug}/user-spec.md` does not exist yet: this is the first run for this issue. Call
    `user-spec-planning`'s Start path directly with the given `slug` (do not let it choose its own
-   slug) and the issue body as the initial task description.
+   slug) and the issue body as the initial task description — strip the Slack mapping marker line
+   (see Naming Contract) first if present; it is metadata for `relay_to_slack`, not part of the
+   description.
 3. Otherwise: call `user-spec-planning`'s Resume path. Treat the latest issue comment supplied in
    the prompt as the newest user answer — append it through the normal interview loop exactly as a
    live chat reply would be, with one exception: if that comment is exactly `/switch-online`, it is
@@ -128,12 +207,12 @@ Triggered once per issue comment (or once on issue open) by `online-pipeline-use
    interview loop as usual and post the next pending question (or next step) as a new comment.
 4. Whenever `user-spec-planning` would "ask the user" (interview questions, a completeness-checker
    gap, a `user_decision_required` validation finding), post the question with `gh issue comment`
-   instead of chat output. Write `status: awaiting_decision` to the status marker *before* this
-   commit, not after: commit+push `logs/userspec/interview.yml` and the status marker (and any
-   other changed state) to `userspec/{slug}` immediately, then exit 0. Writing status after the
-   push would leave it uncommitted and invisible to any later run — each GitHub Actions run is a
-   fresh checkout with no memory of this one, including no local disk continuity. This is a normal
-   stop, not a failure.
+   instead of chat output, then call `relay_to_slack` (Slack Bridge above) with the same question
+   text. Write `status: awaiting_decision` to the status marker *before* this commit, not after:
+   commit+push `logs/userspec/interview.yml` and the status marker (and any other changed state) to
+   `userspec/{slug}` immediately, then exit 0. Writing status after the push would leave it
+   uncommitted and invisible to any later run — each GitHub Actions run is a fresh checkout with no
+   memory of this one, including no local disk continuity. This is a normal stop, not a failure.
 5. Append `ONLINE_PIPELINE_AUTOMATED` to the context you hand `user-spec-planning` for Step 5
    (validate) so its automated-resume branch activates; it is a no-op for the other steps.
 6. Run Steps 1–5 exactly as `user-spec-planning/SKILL.md` defines them, with one exception: **do
@@ -157,7 +236,8 @@ workflow has already created `feature/{slug}` from `main` and checked it out.
 2. If a reviewer in `code-writing`'s review waves returns a finding with `user_decision_required:
    true` that is not a technical/tooling error: write `status: awaiting_decision` to the status
    marker, then commit it together with the work completed so far to `feature/{slug}` and push,
-   then post the question with `gh issue comment {issue_number}`, then exit 0. **Write the status
+   then post the question with `gh issue comment {issue_number}` and the same text via
+   `relay_to_slack {issue_number} "..."` (Slack Bridge above), then exit 0. **Write the status
    marker and commit it before pushing, never after** — the next run that resumes this stop is a
    fresh checkout on a different runner with no disk continuity from this one; it can only see
    `awaiting_decision` if that commit actually reached `origin/feature/{slug}`. A status write that
