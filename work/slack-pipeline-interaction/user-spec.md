@@ -49,7 +49,11 @@ trong Slack, không cần mở terminal.
 2. Lấy Bot Token + Signing Secret, set vào Cloudflare Worker secrets (`wrangler secret put`) —
    Worker là nơi DUY NHẤT trong toàn hệ thống giữ Slack Bot Token thật. Tự sinh 1
    `SLACK_RELAY_TOKEN` (chuỗi bí mật ngẫu nhiên, KHÔNG phải token Slack) dùng để xác thực các repo
-   gọi vào Worker — set vào Worker secrets.
+   gọi vào Worker — set vào Worker secrets. **Set THÊM `GH_PAT` (cùng giá trị quyền rộng dùng
+   chung toàn account) vào Worker secrets** — sửa sau validation round 2 (phát hiện của quality và
+   adequacy): Worker tự gọi GitHub REST API trực tiếp (tạo issue, post comment `/approve`, merge
+   PR — xem bước 9/11/13) nên bắt buộc phải có credential GitHub của riêng nó, tách biệt với
+   `GH_PAT` của repo điều phối (dùng cho job Actions `bootstrap-project.yml`, runtime khác).
 3. Deploy Cloudflare Worker — **đúng 1 lần cho cả account**, phục vụ MỌI repo sau này (không
    redeploy mỗi repo). Lấy URL Worker, set làm Request URL cho Slack Slash Command + Event
    Subscriptions trong Slack App config. Worker expose thêm 1 endpoint nội bộ `POST /relay` (nhận
@@ -97,16 +101,32 @@ trong Slack, không cần mở terminal.
     hỏi kế post song song cả 2 nơi như bước 9.
 11. Validate xong, spec PR mở — message trong thread (qua `/relay`) có link PR + hướng dẫn gõ
     `!approve`. User mở link, xem diff trên GitHub, quay lại Slack gõ `!approve` trong thread —
-    Worker đọc status marker biết đang chờ spec-approve, GIẢ LẬP đúng hành vi người dùng: post
-    comment `/approve` lên PR đó — route job cũ của `online-pipeline-userspec.yml` xử lý y nguyên
-    (merge spec PR, implement bắt đầu).
+    Worker tìm đúng PR theo cơ chế cụ thể ở mục "Cơ chế `!approve` tìm đúng PR" dưới đây, xác nhận
+    đó là spec PR (label `userspec-spec`), GIẢ LẬP đúng hành vi người dùng: post comment `/approve`
+    lên PR đó — route job cũ của `online-pipeline-userspec.yml` xử lý y nguyên (merge spec PR,
+    implement bắt đầu).
 12. Lúc implement gặp quyết định cần hỏi (`awaiting_decision`) — câu hỏi/finding post song song vào
     GitHub VÀ thread (qua `/relay`), user trả lời ngay trong Slack như bước 10.
 13. Implement xong, code PR mở — message (qua `/relay`) có link PR + hướng dẫn `!approve`. User xem
-    diff, quay lại Slack gõ `!approve` — Worker đọc status marker biết đang chờ code-approve, gọi
-    GitHub REST API `PUT .../pulls/{n}/merge` TRỰC TIẾP (năng lực mới — không có listener comment
-    nào cho code PR hiện nay; không cần workflow/trigger GitHub Actions mới vì `pull_request:
-    closed` không phân biệt actor/phương thức merge) — finalize chạy.
+    diff, quay lại Slack gõ `!approve` — Worker tìm đúng PR theo cùng cơ chế, xác nhận đó là code PR
+    (label `userspec-implement`), gọi GitHub REST API `PUT .../pulls/{n}/merge` TRỰC TIẾP (năng lực
+    mới — không có listener comment nào cho code PR hiện nay; không cần workflow/trigger GitHub
+    Actions mới vì `pull_request: closed` không phân biệt actor/phương thức merge) — finalize chạy.
+
+**Cơ chế `!approve` tìm đúng PR (bổ sung sau validation round 2 — phát hiện của adequacy: cơ chế
+này chưa được đặc tả, trong khi mô hình 1-channel-nhiều-thread/feature đồng thời khiến việc tìm sai
+PR là rủi ro thật, không phải hiếm):** Worker đã biết `issue_number` của feature này từ mapping
+`thread_ts -> issue` trong KV (ghi lúc tạo feature ở bước 9). Worker gọi `GET
+/repos/{owner}/{repo}/issues/{issue_number}` lấy `title`, rồi tự tính `slug = kebab-case(title, 40
+ký tự) + "-" + issue_number` — ĐÚNG công thức Naming Contract online-pipeline đã định nghĩa
+("Deterministic from issue.title + issue.number alone, so any job can recompute it without a
+lookup table" — tái hiện thực thuật toán này trong Worker/JS, không cần lookup table mới, không
+phải quyết định mới). Từ `slug`, Worker biết 2 branch có thể: `userspec/{slug}` và
+`feature/{slug}`. Worker gọi `GET /repos/{owner}/{repo}/pulls?head={owner}:userspec/{slug}&state=open`
+— nếu có kết quả (label `userspec-spec`) → đây là spec-approve. Nếu rỗng, gọi tiếp `GET
+/repos/{owner}/{repo}/pulls?head={owner}:feature/{slug}&state=open` — nếu có kết quả (label
+`userspec-implement`) → đây là code-approve. Nếu CẢ HAI rỗng → không có PR nào đang chờ approve
+cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` gõ sai thời điểm" đã có).
 14. Finalize xong — message "✅ Feature xong" post vào thread qua `/relay` (năng lực mới — hiện tại
     `finalize` không post gì cả, kể cả lên GitHub).
 
@@ -115,9 +135,11 @@ trong Slack, không cần mở terminal.
 15. User tự tạo 1 channel Slack mới (public) cho project sắp tạo.
 16. Gõ `/new-project <tên-repo>` NGAY TRONG channel đó (top-level, không phải reply vào thread nào
     — chưa có feature/thread nào tồn tại ở bước này). Worker ACK ngay, tự `conversations.join`
-    channel này, ghi mapping `channel_id -> <tên-repo>` vào KV (biết sẵn 2 giá trị, không cần
-    round-trip), rồi bắn `repository_dispatch` tới repo điều phối, kèm `channel_id` trong payload
-    (KHÔNG kèm `thread_ts` — không có thread ở bước này).
+    channel này, rồi bắn `repository_dispatch` tới repo điều phối, kèm `channel_id` trong payload
+    (KHÔNG kèm `thread_ts` — không có thread ở bước này). **KHÔNG ghi mapping `channel_id<->repo`
+    vào KV ngay ở bước này** (sửa sau validation round 2 — phát hiện của adequacy: ghi sớm trước
+    khi biết `gh repo create` có thành công hay không để lại mapping "ma" nếu tên repo đã tồn tại
+    — xem bước 18 cho thời điểm ghi thật).
 17. Workflow `bootstrap-project.yml` trong repo điều phối nhận dispatch, chạy trên 1 working
     directory HOÀN TOÀN TRỐNG (không phải checkout của chính repo điều phối) rồi gọi `claude -p`
     thật với skill `project-initialization`, kèm literal tự động `PROJECT_BOOTSTRAP_AUTOMATED` VÀ
@@ -137,10 +159,15 @@ trong Slack, không cần mở terminal.
     `project-initialization` xong, job tự vendor + set secret cho CẢ `online-pipeline` VÀ Slack
     integration trên repo mới (copy `GH_PAT`, Claude auth credential, `SLACK_RELAY_TOKEN` dùng
     chung từ control-plane) — không cần chạy script tay ở local.
-18. Job gửi kết quả về đúng `channel_id` (top-level message, không phải reply thread) qua `POST
-    /relay`: link repo mới, xác nhận đã sẵn sàng. User gõ `/new-feature ...` ngay trong channel đó
-    như bước 9 — không cần làm gì thêm ở local, vì Claude GitHub App đã cover repo này nhờ cài ở
-    mức "All repositories" từ bước 5.
+18. CHỈ khi job thành công (repo tạo xong, vendor+secret xong): job gọi `POST /relay` kèm cờ mới
+    `link_channel_to_repo` (sửa sau validation round 2) — Worker nhận cờ này thì MỚI ghi mapping
+    `channel_id -> repo` vào KV (lần đầu tiên, đúng lúc biết chắc repo thật sự tồn tại và sẵn sàng),
+    rồi post message kết quả về đúng `channel_id` (top-level, không phải reply thread): link repo
+    mới, xác nhận đã sẵn sàng. Nếu job THẤT BẠI: gọi `POST /relay` báo lỗi như thường, KHÔNG kèm cờ
+    `link_channel_to_repo` — không có mapping nào được ghi, channel vẫn ở trạng thái "chưa link",
+    user có thể `/new-project` lại với tên khác hoặc `/link-repo` tay sau khi tự khắc phục. Sau khi
+    mapping đã ghi: user gõ `/new-feature ...` ngay trong channel đó như bước 9 — không cần làm gì
+    thêm ở local, vì Claude GitHub App đã cover repo này nhờ cài ở mức "All repositories" từ bước 5.
 
 ### Trường hợp biên đã đồng ý (cả Phần A và Phần B)
 
@@ -349,6 +376,21 @@ trong Slack, không cần mở terminal.
   duy nhất" đã định cho Worker. Đổi sang: Worker là nơi DUY NHẤT giữ token Slack thật; mỗi repo chỉ
   giữ `SLACK_RELAY_TOKEN` (quyền hẹp, chỉ gọi được 1 endpoint relay) — giảm thiệt hại nếu secret
   của 1 repo con bị lộ.
+- Worker tự giữ `GH_PAT` riêng (sửa lại sau validation round 2 — phát hiện của quality và adequacy):
+  việc viết lại kiến trúc relay ở round 1 vô tình bỏ sót `GH_PAT` khỏi danh sách secret của Worker,
+  trong khi Worker vẫn phải tự gọi GitHub REST API trực tiếp (tạo issue, `/approve`, merge PR) —
+  thêm `GH_PAT` vào bước setup Worker (Expected Behavior bước 2) để khớp với Constraints/Risk 2 đã
+  luôn khẳng định Worker dùng chung GH_PAT.
+- Cơ chế `!approve` tìm đúng PR: Worker tự tính `slug` từ issue title+number (tái hiện thực đúng
+  công thức Naming Contract online-pipeline đã định nghĩa, không cần lookup table/mapping mới), rồi
+  tra 2 branch khả dĩ (`userspec/{slug}`, `feature/{slug}`) qua GitHub REST API để tìm PR đang mở —
+  bổ sung sau validation round 2 (phát hiện của adequacy): mô hình 1-channel-nhiều-feature-đồng-thời
+  khiến việc "biết đang chờ approve gì" không thể chỉ nói chung mà cần cơ chế cụ thể, nếu không rủi
+  ro approve/merge nhầm PR của 1 feature khác trong cùng repo.
+- Ghi mapping `channel_id<->repo` CHỈ SAU KHI bootstrap thành công (không ghi ngay lúc nhận
+  `/new-project`) — sửa lại sau validation round 2 (phát hiện của adequacy): ghi sớm để lại mapping
+  "ma" trỏ tới repo không tồn tại nếu `gh repo create` thất bại (tên trùng) — đổi sang: job bootstrap
+  tự báo thành công qua `/relay` kèm cờ `link_channel_to_repo`, Worker chỉ ghi KV lúc đó.
 - Giữ CHUNG 1 user-spec cho cả Phần A và Phần B (user xác nhận không tách), dù về nguyên tắc 2 mảng
   tách được thành 2 giá trị độc lập — vì user ưu tiên làm 1 lần.
 - Không giới hạn ai trong Slack workspace được `!approve`/`/new-project` — user xác nhận lại quyết
@@ -382,10 +424,10 @@ thật (không phải bộ test tự động trong CI) — xem chi tiết ở Ve
 | 1. Đọc `online-pipeline/SKILL.md` sau khi sửa | Có điểm chèn gọi `POST /relay` song song với mọi `gh issue comment` hiện có (trừ finalize); literal `!approve` định nghĩa rõ, route theo status marker/PR đang mở; không đổi `on:` event của 3 workflow YAML hiện có |
 | 2. Đọc `project-initialization/SKILL.md` sau khi sửa | Chế độ tự động gated bằng literal cố định `PROJECT_BOOTSTRAP_AUTOMATED`; CHỈ bỏ ĐÚNG 1 "ask" ("ask explicitly before pushing main" cuối Step 4) — Step 1/Step 4-dev-branch không bị sửa gì (ask của chúng tự nhiên không kích hoạt trong bối cảnh bootstrap); Step 5 chỉ đổi đích report sang `POST /relay`, không phải bỏ "ask"; không đổi hành vi khi KHÔNG có signal này |
 | 3. Đọc workflow `bootstrap-project.yml` | KHÔNG có bước `gh repo create` TRƯỚC khi gọi `claude -p` — việc tạo repo để nguyên cho `project-initialization` Step 4 tự làm; working directory cho `claude -p` hoàn toàn trống (không checkout nội dung repo điều phối) |
-| 4. Đọc Worker source trong repo điều phối | Có verify Slack signing secret cho request từ Slack; có `POST /relay` riêng xác thực bằng `SLACK_RELAY_TOKEN` (không phải signing secret Slack); chỉ Worker gọi `chat.postMessage` bằng Slack Bot Token thật, không repo nào khác có token này; có xử lý ACK-ngay-rồi-background cho cả slash-command (`response_url`) và Events API; có `conversations.join` lúc nhận lệnh đầu tiên trong channel; đọc/ghi đúng 2 mapping KV (`channel_id<->repo`, `thread_ts<->issue`) |
-| 5. Đọc `bootstrap-project.yml` tiếp | Nhận `repository_dispatch` đúng payload (`channel_id`, tên repo, KHÔNG có `thread_ts`); gọi `claude -p` với signal `PROJECT_BOOTSTRAP_AUTOMATED`; sau đó tự vendor+set-secret (`GH_PAT`, Claude auth, `SLACK_RELAY_TOKEN`) cho repo mới; không tự rollback khi lỗi giữa chừng |
-| 6. Đọc `setup-online-pipeline.sh` sau khi mở rộng | Có thêm bước set secret `SLACK_RELAY_TOKEN` (không phải Slack Bot Token thật) cho repo được onboard, không chỉ `GH_PAT`/Claude-auth như cũ; online-pipeline/SKILL.md có kiểm tra secret trống trước khi gọi `/relay`, không lỗi nếu repo chưa onboard Slack |
-| 7. Kiểm tra `scripts/init-feature-folder.sh` | Chữ ký không đổi |
+| 4. Đọc Worker source trong repo điều phối | Có verify Slack signing secret cho request từ Slack; có `POST /relay` riêng xác thực bằng `SLACK_RELAY_TOKEN` (không phải signing secret Slack); chỉ Worker gọi `chat.postMessage` bằng Slack Bot Token thật, không repo nào khác có token này; Worker tự giữ `GH_PAT` riêng để gọi GitHub REST API trực tiếp (tạo issue, `/approve` comment, merge PR); có xử lý ACK-ngay-rồi-background cho cả slash-command (`response_url`) và Events API; có `conversations.join` lúc nhận lệnh đầu tiên trong channel; đọc/ghi đúng 2 mapping KV (`channel_id<->repo`, `thread_ts<->issue`) |
+| 5. Đọc đoạn tìm PR trong Worker source | Có hàm tính `slug` từ issue title+number (đúng công thức kebab-case+issue-number của Naming Contract online-pipeline); có gọi `GET /pulls?head=...` cho cả 2 branch `userspec/{slug}` và `feature/{slug}` trước khi quyết định route `!approve`; không có PR nào mở → trả lỗi rõ |
+| 6. Đọc `bootstrap-project.yml` | Nhận `repository_dispatch` đúng payload (`channel_id`, tên repo, KHÔNG có `thread_ts`); gọi `claude -p` với signal `PROJECT_BOOTSTRAP_AUTOMATED`; sau đó tự vendor+set-secret (`GH_PAT`, Claude auth, `SLACK_RELAY_TOKEN`) cho repo mới; CHỈ gọi `/relay` kèm cờ `link_channel_to_repo` khi THÀNH CÔNG, không kèm cờ này khi báo lỗi; không tự rollback khi lỗi giữa chừng |
+| 7. Đọc `setup-online-pipeline.sh` sau khi mở rộng | Có thêm bước set secret `SLACK_RELAY_TOKEN` (không phải Slack Bot Token thật) cho repo được onboard, không chỉ `GH_PAT`/Claude-auth như cũ; online-pipeline/SKILL.md có kiểm tra secret trống trước khi gọi `/relay`, không lỗi nếu repo chưa onboard Slack |
 | 8. Đọc đoạn approve code PR trong Worker/SKILL.md | Gọi REST API merge trực tiếp, không qua comment; xác nhận tài liệu ghi rõ không cần workflow/trigger GitHub Actions mới |
 | 9. Đọc đoạn xử lý edge case trong Worker/SKILL.md | Có đủ các nhánh: channel chưa link, tin nhắn rời không thuộc thread nào, tin nhắn cho thread đã finalize, double-submit `!approve`, slash command trùng lặp, `/link-repo` ghi đè |
 
