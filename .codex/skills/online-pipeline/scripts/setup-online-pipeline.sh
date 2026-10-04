@@ -49,6 +49,10 @@ echo "  1. CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — Claude auth (pick on
 echo "  2. GH_PAT — a Personal Access Token with 'repo' scope, used only to merge the spec PR on"
 echo "     /approve. The default GITHUB_TOKEN cannot trigger the implement job's workflow run, so"
 echo "     this one merge step needs a real user token instead."
+echo "  3. (optional) SLACK_RELAY_TOKEN + SLACK_WORKER_URL — only if this account already has the"
+echo "     slack-pipeline-interaction Slack bridge deployed (one Cloudflare Worker, set up once per"
+echo "     account — see that control-plane repo's README.md). Skip both if you don't have one;"
+echo "     online-pipeline works exactly as before without them, just GitHub-only."
 echo ""
 
 set_secret_if_confirmed() {
@@ -72,6 +76,19 @@ case "$auth_choice" in
 esac
 
 set_secret_if_confirmed "GH_PAT" "Paste the Personal Access Token (repo scope)"
+
+read -r -p "Set up the Slack bridge for this repo now? [y/N] " slack_choice
+if [[ "$slack_choice" =~ ^[Yy]$ ]]; then
+  set_secret_if_confirmed "SLACK_RELAY_TOKEN" "Paste SLACK_RELAY_TOKEN (same value as the Worker's own secret, NOT the Slack bot token)"
+  set_secret_if_confirmed "SLACK_WORKER_URL" "Paste the deployed Worker URL (e.g. https://slack-pipeline-bridge.<account>.workers.dev)"
+  echo ""
+  echo "Remaining Slack steps (done once per repo, in Slack itself, not scriptable here):"
+  echo "  - Create a public Slack channel for this project."
+  echo "  - Run /link-repo <owner>/<name> in that channel once."
+else
+  echo "Skipped Slack bridge — online-pipeline stays GitHub-only for this repo. Re-run this script"
+  echo "later, or set SLACK_RELAY_TOKEN/SLACK_WORKER_URL by hand, to turn it on."
+fi
 
 # --- Print the manual, browser-only steps ---
 cat <<'EOF'

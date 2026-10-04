@@ -81,8 +81,10 @@ Before any push, inspect whether a local or remote `dev` branch already exists. 
 create `dev` from `main`. If either exists, show its relationship to `main` and ask whether to reuse
 it; never reset or recreate an existing `dev`, and stop if local and remote histories conflict.
 
-Ask explicitly before pushing `main`. After approval, push `main`, push the created or approved
-`dev`, leave `dev` checked out, and read the canonical repository URL through `gh`.
+Ask explicitly before pushing `main` — unless the literal `PROJECT_BOOTSTRAP_AUTOMATED` signal is
+present in context (see Automated Bootstrap Mode below), in which case push without asking. After
+approval (or immediately, when automated), push `main`, push the created or approved `dev`, leave
+`dev` checked out, and read the canonical repository URL through `gh`.
 
 ## 5. Report the Result
 
@@ -94,4 +96,47 @@ Report:
 - that `dev` is the active branch;
 - the next step: create the initial Project Knowledge with `documentation-writing`.
 
+When `PROJECT_BOOTSTRAP_AUTOMATED` is present, send this same report to
+`POST ${SLACK_WORKER_URL}/relay` (header `X-Relay-Token: ${SLACK_RELAY_TOKEN}`, JSON body
+`{"channel_id": "${CHANNEL_ID}", "text": "..."}`) instead of chat output — nobody reads this
+session's stdout in an automated bootstrap job. This is purely a destination change, not a new
+"ask" or anything skipped: Step 5 has no "ask" in either mode.
+
+Phrase this automated report as an **in-progress status, never as completion or readiness** (e.g.
+"Repo {url} created, finishing setup..." — not "ready" or "done"). The calling workflow
+(`bootstrap-project.yml`) still has to vendor online-pipeline's secrets onto the new repo and write
+the Slack channel-to-repo mapping *after* this skill returns; only its own later, dedicated
+`/relay` call — gated on all of that actually succeeding — is the authoritative "ready" signal (see
+`skills/online-pipeline/SKILL.md`'s Slack Bridge section and the control-plane repo's
+`bootstrap-project.yml`). A completion-sounding message here would race that gate: if the
+secret-vendoring or KV write fails afterward, the user would already have seen a success-shaped
+message moments before seeing a failure — the exact premature-"ready" problem this project's Slack
+integration was deliberately designed to avoid at every other step.
+
 Do not review or merge files from `old*` during initialization.
+
+## Automated Bootstrap Mode
+
+Gated on the literal string `PROJECT_BOOTSTRAP_AUTOMATED` appearing in context — never active in
+an interactive session, since nothing supplies that literal there. Used by the
+`slack-pipeline-interaction` control-plane repo's `bootstrap-project.yml` workflow to create a
+brand-new project from a Slack `/new-project` command with no human available to answer prompts.
+
+This mode changes exactly one thing: the "ask explicitly before pushing main" step in Step 4 is
+skipped (see above). Nothing else in this skill changes:
+
+- Step 1's "ask" only fires when the current directory is already a git repo with uncommitted
+  changes. The automated caller always runs this in a fresh, empty directory, so that condition
+  never arises here — no signal is needed to bypass it.
+- Step 4's "origin already exists, is this the right repo?" branch only fires when `origin` is
+  already configured. The automated caller never pre-creates the repo or configures `origin`
+  before invoking this skill, so the "origin does not exist" branch runs instead — the one that
+  calls `gh repo create` itself, using the repository name already supplied in context. That name
+  satisfies "ask for the GitHub repository name unless already supplied," so that ask does not
+  fire either.
+- Step 4's "reuse existing `dev`?" ask only fires when a `dev` branch already exists. A brand-new
+  repository never has one, so this does not fire either.
+- Step 5 has no "ask" — only its report destination changes (see above).
+
+The one real skip (push `main`) is safe here because the triggering Slack command is itself the
+user's explicit confirmation to create and push this repository.

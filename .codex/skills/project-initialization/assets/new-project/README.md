@@ -53,6 +53,11 @@ skill and agent those workflows depend on (a CI runner has no access to your mac
    `ANTHROPIC_API_KEY` repo secret.
 3. Create a Personal Access Token (`repo` scope) at https://github.com/settings/tokens and store it
    as the `GH_PAT` repo secret (needed only so approving a spec PR can trigger the implement job).
+4. (Optional) To also drive this repo's online-pipeline from Slack: set the `SLACK_RELAY_TOKEN` and
+   `SLACK_WORKER_URL` repo secrets (same values as the account-wide Slack bridge Worker already
+   deployed elsewhere — see that control-plane repo's own README), create a public Slack channel
+   for this project, and run `/link-repo <owner>/<name>` in it once. Skip this entirely if there is
+   no Slack bridge for this account yet; online-pipeline works exactly the same without it.
 
 No script needed for this repo — the workflow files and vendored skills are already in place. Once
 the secrets are set, open a new issue to start the pipeline.
