@@ -174,9 +174,15 @@ skill already calls `gh issue comment`:**
 - The workflow's own "Report technical failure" steps in `online-pipeline-implement.yml` and
   `online-pipeline-finalize.yml`, after 3 failed attempts — these already call `gh issue comment`
   today; Slack gets the identical message, not a special case.
-- Stage `knowledge-init` steps 1, 3, and 4 (already-complete short-circuit, interview
-  question/checkpoint, and completion message), and `online-pipeline-knowledge-init.yml`'s own
-  "Report technical failure" step, after 3 failed attempts — same shape as the two bullets above.
+- `online-pipeline-knowledge-init.yml`'s own retry-loop step, after every `claude -p` attempt, and
+  its "Report technical failure" step after 3 failed attempts. Stage `knowledge-init` is the one
+  exception to "the agent calls `relay_to_slack` itself": in production, the agent reproducing that
+  bash block via its own tool calls on every single turn proved unreliable — it sometimes posts the
+  `gh issue comment` and commits but skips the relay call, so the question lands on GitHub and
+  never on Slack. The workflow instead diffs `gh issue view --json comments` before/after each
+  attempt and relays every newly-posted comment body deterministically, exactly once, regardless of
+  which step inside the stage posted it — see Stage `knowledge-init` below, which explicitly tells
+  the agent not to call `relay_to_slack` itself for this reason.
 
 **The one exception — Slack-only, no GitHub equivalent:** when `finalize` completes successfully,
 `online-pipeline-finalize.yml` posts "✅ Feature xong" (or equivalent) via `relay_to_slack` only.
@@ -302,6 +308,10 @@ Triggered once per issue comment (or once on issue open) by
 `documentation-writing`'s initial-documentation flow for the whole repository, not a single
 feature.
 
+Never call `relay_to_slack` yourself anywhere in this stage, unlike every other stage in this
+file — the workflow mirrors every `gh issue comment` you post to Slack deterministically after you
+exit (see Slack Bridge above). Just post the comment; do not also reproduce the relay call.
+
 1. Always start by running `create-project-knowledge.md`'s Phase 0 (Start or Resume), regardless of
    how many times this stage has already run for this issue. Phase 0's own repository/
    configuration/`CLAUDE.md`/current-Project-Knowledge inspection is the decisive completion check
@@ -309,8 +319,8 @@ feature.
    template, or only partially filled — whether because this very flow already finished it, a
    `documentation-writing` full update/audit completed it, or someone edited it by hand — skip the
    interview entirely. Post "Project Knowledge đã được khởi tạo rồi." (or equivalent) with `gh issue
-   comment {issue_number}`, mirror it with `relay_to_slack` (Slack Bridge above), then call `gh
-   issue close {issue_number}` yourself. Only after that, unconditionally — create
+   comment {issue_number}`, then call `gh issue close {issue_number}` yourself. Only after that,
+   unconditionally — create
    `work/project-knowledge/interview.yml` with `interview_metadata.status: completed` if it does
    not exist yet, or otherwise just refresh its `interview_metadata.last_updated` timestamp even
    when `status` already reads `completed` and nothing else about it needs to change — and commit
@@ -330,15 +340,15 @@ feature.
    the newest user input, the same way `userspec-turn` treats these two sources.
 3. Every point where `create-project-knowledge.md` asks the user anything — a question batch, a
    cycle checkpoint, the final-summary checkpoint, the documentation-approval checkpoint — post it
-   with `gh issue comment {issue_number}` instead of chat output, then call `relay_to_slack` (Slack
-   Bridge above) with the same text, then commit `work/project-knowledge/interview.yml` (and
-   nothing else) straight to `main` and push as the last action of this run, then exit 0. Do not
+   with `gh issue comment {issue_number}` instead of chat output, then commit
+   `work/project-knowledge/interview.yml` (and nothing else) straight to `main` and push as the
+   last action of this run, then exit 0. Do not
    invent any literal signal to skip or auto-confirm a checkpoint — every one of them round-trips
    through a real comment, exactly like `userspec-turn`'s questions.
 4. When "Write the Documentation" finishes and the user has approved it: write the real Project
    Knowledge files in the working tree and set `interview_metadata.status: completed`, then post
-   the completion comment with `gh issue comment {issue_number}`, mirror it with `relay_to_slack`,
-   then call `gh issue close {issue_number}` yourself. Only after all of that, run
+   the completion comment with `gh issue comment {issue_number}`, then call `gh issue close
+   {issue_number}` yourself. Only after all of that, run
    `~/.claude/scripts/sync-to-codex.sh --project "$PWD" --apply` (this turn always touches
    `.claude/**`/`CLAUDE.md`, same requirement as `documentation-writing/SKILL.md`'s Manual Project
    Documentation Sync) and commit everything — the Project Knowledge files plus generated

@@ -84,7 +84,31 @@ jobs:
           git config user.email "online-pipeline[bot]@users.noreply.github.com"
           git config user.name "online-pipeline[bot]"
 
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
           BEFORE_SHA="$(git rev-parse HEAD)"
+          # Comment count, not SHA — comments aren't git state. Stage knowledge-init is the one
+          # exception to "the agent calls relay_to_slack itself" (see Slack Bridge above): in
+          # production the agent reliably posts the gh issue comment but sometimes skips its own
+          # relay_to_slack reproduction, so this loop mirrors every new comment deterministically
+          # instead, regardless of which step inside the stage posted it.
+          BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
           ATTEMPTS=3
           RESULT="technical_error"
 
@@ -108,6 +132,21 @@ jobs:
             set +e
             claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
             set -e
+
+            AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+            if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+              # Filtered to this workflow's own gh issue comment calls (always authored as
+              # github-actions[bot], the identity behind secrets.GITHUB_TOKEN) — never a human's
+              # GitHub comment or the Worker's own mirror of a Slack reply (posted with a real
+              # user's GH_PAT), either of which landing on the issue during this attempt's run
+              # window would otherwise get echoed straight back into the same Slack thread.
+              while IFS= read -r COMMENT_JSON; do
+                COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+                relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+              done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                        | jq -c '.[] | select(.author.login == "github-actions[bot]") | .body')
+            fi
+            BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
 
             git fetch origin main
             AFTER_SHA="$(git rev-parse origin/main)"
