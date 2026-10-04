@@ -77,7 +77,12 @@ trong Slack, không cần mở terminal.
    làm secret repo — vì mỗi GitHub Actions job (`userspec-turn`, `implement`) gọi `POST /relay`
    trên Worker (không gọi Slack API trực tiếp) để post song song; `SLACK_RELAY_TOKEN` chỉ cho phép
    gọi đúng endpoint relay đó, không có quyền gì khác trên Slack — nếu secret này bị lộ, thiệt hại
-   chỉ là "ai đó post được tin nhắn giả vào đúng channel đã link", không lộ token Slack thật.
+   KHÔNG lộ token Slack thật, nhưng **cũng KHÔNG chỉ giới hạn ở channel của repo đó** (sửa sau
+   validation round 3 — phát hiện của adequacy: `SLACK_RELAY_TOKEN` dùng CHUNG 1 giá trị cho MỌI
+   repo, `/relay` không kiểm tra repo nào đang gọi khớp với `channel_id` nào trong payload — ai có
+   token này có thể gọi `/relay` với BẤT KỲ `channel_id` nào đã link, không chỉ channel của repo
+   mình) — chấp nhận rủi ro này ở mức tương đương các quyết định "dùng chung" khác đã chốt (xem
+   Risk 2), vì mọi repo đều do cùng 1 user sở hữu.
    NẾU repo chưa chạy bước này (`SLACK_RELAY_TOKEN` không tồn tại): mọi lệnh gọi `/relay` bị bỏ qua
    (có kiểm tra secret trống trước khi gọi), hành vi `online-pipeline` hiện có (chỉ `gh issue
    comment`) không đổi.
@@ -91,14 +96,28 @@ trong Slack, không cần mở terminal.
 
 9. User gõ `/new-feature <mô tả>` trong channel đã link — Worker ACK ngay (<3s, theo giới hạn
    Slack), xử lý thật ở background (`ctx.waitUntil`): post message mở thread trước (lấy
-   `thread_ts` của chính message đó), tạo GitHub issue mới (title từ mô tả, body nhúng `channel_id`
-   + `thread_ts` vừa có), ghi `thread_ts -> issue` vào Cloudflare KV, gửi kết quả qua
-   `response_url`. `userspec-turn` chạy, câu hỏi đầu tiên post song song vào GitHub issue comment
-   (như cũ) VÀ gọi `POST /relay` trên Worker để post vào Slack thread.
+   `thread_ts` của chính message đó), rồi tạo GitHub issue mới (title từ mô tả, body nhúng
+   `channel_id` + `thread_ts` vừa có). NẾU tạo issue lỗi (rate limit, network, token) SAU KHI
+   thread đã mở (bổ sung sau validation round 3 — phát hiện của adequacy: thứ tự "mở thread trước,
+   tạo issue sau" có thể để lại thread "mồ côi" không có issue nào đứng sau): Worker post NGAY 1
+   message lỗi rõ vào CHÍNH thread đó (đã có `thread_ts`, luôn làm được) — "Không tạo được feature,
+   thử lại bằng /new-feature khác" — không coi thread này là active, không ghi mapping
+   `thread_ts -> issue` nào. Nếu tạo issue thành công: ghi `thread_ts -> issue` vào Cloudflare KV,
+   gửi kết quả qua `response_url`. `userspec-turn` chạy, câu hỏi đầu tiên post song song vào GitHub
+   issue comment (như cũ) VÀ gọi `POST /relay` trên Worker để post vào Slack thread.
 10. User trả lời bằng tin nhắn thường trong thread (qua Slack Events API — Worker ACK 200 ngay rồi
     xử lý background; đường này không có `response_url`, Worker tự `chat.postMessage` bằng token
     thật của nó để báo kết quả) — Worker relay thành `gh issue comment`, interview tiếp tục, câu
     hỏi kế post song song cả 2 nơi như bước 9.
+
+**Lọc tin nhắn do chính bot tạo ra (bổ sung sau validation round 3 — phát hiện CRITICAL của
+quality: mọi message Worker tự post vào thread — mở thread, câu hỏi, hướng dẫn `!approve`, "Feature
+xong" — đều là message TRONG channel mà bot là member, nên tự kích hoạt lại event `message.channels`
+của chính nó nếu không lọc, có thể gây relay lặp hoặc tự khớp literal `!approve` trong câu hướng dẫn
+"gõ !approve" mà KHÔNG do user gõ):** Trước khi coi 1 Events API message là "tin nhắn cần relay/xét
+`!approve`", Worker PHẢI kiểm tra `event.bot_id` (Slack luôn đính kèm field này cho message do bot
+tạo) — nếu có `bot_id` (bất kể của bot nào, kể cả chính Worker) → bỏ qua ngay, không relay, không
+xét `!approve`. Đây là bước lọc bắt buộc, không phải tuỳ chọn.
 11. Validate xong, spec PR mở — message trong thread (qua `/relay`) có link PR + hướng dẫn gõ
     `!approve`. User mở link, xem diff trên GitHub, quay lại Slack gõ `!approve` trong thread —
     Worker tìm đúng PR theo cơ chế cụ thể ở mục "Cơ chế `!approve` tìm đúng PR" dưới đây, xác nhận
@@ -127,8 +146,13 @@ phải quyết định mới). Từ `slug`, Worker biết 2 branch có thể: `u
 /repos/{owner}/{repo}/pulls?head={owner}:feature/{slug}&state=open` — nếu có kết quả (label
 `userspec-implement`) → đây là code-approve. Nếu CẢ HAI rỗng → không có PR nào đang chờ approve
 cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` gõ sai thời điểm" đã có).
-14. Finalize xong — message "✅ Feature xong" post vào thread qua `/relay` (năng lực mới — hiện tại
-    `finalize` không post gì cả, kể cả lên GitHub).
+14. Finalize xong (thành công) — message "✅ Feature xong" post vào thread qua `/relay` (năng lực
+    mới — hiện tại `finalize` THÀNH CÔNG không post gì cả, kể cả lên GitHub). Finalize LỖI KỸ
+    THUẬT sau 3 lần retry (sửa sau validation round 3 — phát hiện của skeptic và quality: tài liệu
+    trước đó mô tả sai "finalize không bao giờ post gì" — thực ra `online-pipeline-finalize.yml` đã
+    có sẵn bước "Report technical failure" gọi `gh issue comment` khi lỗi) — điểm này VỐN ĐÃ có
+    `gh issue comment`, nên theo đúng nguyên tắc "post song song mọi điểm hiện có" (không phải
+    ngoại lệ), mirror thêm `POST /relay` với cùng nội dung lỗi vào thread.
 
 ### Phần B — Khởi tạo project mới
 
@@ -160,14 +184,21 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
     integration trên repo mới (copy `GH_PAT`, Claude auth credential, `SLACK_RELAY_TOKEN` dùng
     chung từ control-plane) — không cần chạy script tay ở local.
 18. CHỈ khi job thành công (repo tạo xong, vendor+secret xong): job gọi `POST /relay` kèm cờ mới
-    `link_channel_to_repo` (sửa sau validation round 2) — Worker nhận cờ này thì MỚI ghi mapping
-    `channel_id -> repo` vào KV (lần đầu tiên, đúng lúc biết chắc repo thật sự tồn tại và sẵn sàng),
-    rồi post message kết quả về đúng `channel_id` (top-level, không phải reply thread): link repo
-    mới, xác nhận đã sẵn sàng. Nếu job THẤT BẠI: gọi `POST /relay` báo lỗi như thường, KHÔNG kèm cờ
-    `link_channel_to_repo` — không có mapping nào được ghi, channel vẫn ở trạng thái "chưa link",
-    user có thể `/new-project` lại với tên khác hoặc `/link-repo` tay sau khi tự khắc phục. Sau khi
-    mapping đã ghi: user gõ `/new-feature ...` ngay trong channel đó như bước 9 — không cần làm gì
-    thêm ở local, vì Claude GitHub App đã cover repo này nhờ cài ở mức "All repositories" từ bước 5.
+    `link_channel_to_repo`. Worker nhận cờ này: **GHI KV TRƯỚC, CHỈ post message thành công SAU KHI
+    ghi KV xong** (thứ tự bắt buộc — bổ sung sau validation round 3, phát hiện của adequacy: nếu
+    post message "sẵn sàng" trước/không phụ thuộc kết quả ghi KV, 1 lỗi ghi KV hiếm (quota/network)
+    sẽ tạo ra thông báo "sẵn sàng" giả trong khi `/new-feature` sau đó vẫn báo "channel chưa link").
+    Nếu ghi KV thất bại: Worker post message RÕ RÀNG là lỗi khác — "Repo đã tạo xong nhưng lưu liên
+    kết channel thất bại, gõ `/link-repo <owner>/<name>` để hoàn tất" (tái dùng đúng lệnh `/link-repo`
+    đã có sẵn làm đường khắc phục, không cần cơ chế mới) — KHÔNG post message "sẵn sàng" trong
+    trường hợp này. Nếu ghi KV thành công: post message kết quả về đúng `channel_id` (top-level,
+    không phải reply thread): link repo mới, xác nhận đã sẵn sàng. Nếu job bootstrap THẤT BẠI (ở
+    bước tạo repo hay vendor/secret, trước khi tới bước này): gọi `POST /relay` báo lỗi như thường,
+    KHÔNG kèm cờ `link_channel_to_repo` — không có mapping nào được ghi, channel vẫn ở trạng thái
+    "chưa link", user có thể `/new-project` lại với tên khác hoặc `/link-repo` tay sau khi tự khắc
+    phục. Sau khi mapping đã ghi thành công: user gõ `/new-feature ...` ngay trong channel đó như
+    bước 9 — không cần làm gì thêm ở local, vì Claude GitHub App đã cover repo này nhờ cài ở mức
+    "All repositories" từ bước 5.
 
 ### Trường hợp biên đã đồng ý (cả Phần A và Phần B)
 
@@ -203,8 +234,9 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
       như cũ.
 - [ ] Mọi câu hỏi/thông báo bot ở `userspec-turn`, `implement`, `awaiting_decision` xuất hiện ĐỒNG
       THỜI ở `gh issue comment` VÀ Slack thread, nội dung khớp nhau — ngoại trừ thông báo
-      "Feature xong" lúc finalize là Slack-only (finalize hiện không gọi `gh issue comment` ở bước
-      nào).
+      "✅ Feature xong" khi finalize THÀNH CÔNG là Slack-only (finalize chỉ KHÔNG post gì ở nhánh
+      THÀNH CÔNG; nhánh LỖI kỹ thuật sau 3 lần retry đã có sẵn `gh issue comment`, điểm này PHẢI
+      mirror vào Slack như mọi điểm khác, không phải ngoại lệ — sửa sau validation round 3).
 - [ ] Tin nhắn thường trong thread được relay đúng thành `gh issue comment`, kích hoạt route job
       hiện có (`issue_comment`) y như người dùng tự comment trên GitHub.
 - [ ] `!approve` lúc spec PR đang mở → Worker post `/approve` lên đúng PR đó → PR merge qua route
@@ -227,6 +259,11 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
       mọi lời gọi `POST /relay` từ repo đó bị bỏ qua (secret trống → không gọi), toàn bộ hành vi
       `online-pipeline` hiện có không đổi (chỉ `gh issue comment` như cũ).
 - [ ] Mọi edge case ở mục "Trường hợp biên đã đồng ý" trên hoạt động đúng như mô tả.
+- [ ] Message do chính Worker/bot post vào thread (mở thread, câu hỏi, hướng dẫn `!approve`,
+      "Feature xong") KHÔNG bị chính Worker relay lại thành `gh issue comment`, và KHÔNG tự kích
+      hoạt `!approve` dù nội dung hướng dẫn có chứa literal đó.
+- [ ] Tạo GitHub issue lỗi NGAY SAU KHI thread đã mở (ở bước `/new-feature`) → message lỗi rõ xuất
+      hiện trong chính thread đó, không để thread "mồ côi" không ai biết là đã lỗi.
 
 **Phần B:**
 - [ ] `/new-project <tên-repo>` trong 1 channel public mới tạo → GitHub repo mới xuất hiện (private,
@@ -241,6 +278,8 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
 - [ ] Job bootstrap chạy `project-initialization` không bao giờ bị kẹt chờ trả lời cho câu hỏi
       "origin đã tồn tại, có đúng repo không?" (vì không tự `gh repo create` trước khi gọi `claude
       -p` — để skill tự tạo repo ở Step 4 của chính nó khi `origin` chưa tồn tại).
+- [ ] Bootstrap thành công nhưng bước ghi KV `channel_id->repo` lỗi → Worker báo lỗi "lưu liên kết
+      thất bại, gõ /link-repo" — KHÔNG post message "sẵn sàng" giả trong trường hợp này.
 
 ## Constraints
 
@@ -261,16 +300,25 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
 - Approve dùng literal `!approve` (không phải `/approve`, để không trùng cú pháp slash-command thật
   của Slack) — dùng CHUNG 1 từ khoá cho cả spec-approve và code-approve, Worker tự route theo status
   marker/PR đang mở của feature đó.
-- Post song song GitHub + Slack ở MỌI điểm hiện tại đã có `gh issue comment` — ngoại lệ duy nhất:
-  thông báo finalize là Slack-only (năng lực mới, không có điểm tương đương trên GitHub).
+- Post song song GitHub + Slack ở MỌI điểm hiện tại đã có `gh issue comment` (gồm cả nhánh lỗi kỹ
+  thuật của `implement`/`finalize` sau khi hết số lần retry — không chỉ nhánh thành công) — ngoại
+  lệ duy nhất: thông báo "✅ Feature xong" khi finalize THÀNH CÔNG là Slack-only (năng lực mới,
+  nhánh thành công của finalize không có điểm `gh issue comment` tương đương trên GitHub).
 - Channel Slack cho mỗi project PHẢI là public channel (giới hạn kỹ thuật của
   `conversations.join`).
 - Mọi slash-command và mọi message Events API phải ACK trong <3 giây (giới hạn cứng của Slack);
   xử lý GitHub API thật luôn ở background sau khi đã ACK.
-- Repo điều phối (control-plane) + Worker dùng CHUNG 1 credential quyền rộng (GH_PAT tài khoản,
-  Claude auth, Claude GitHub App "All repositories") cho MỌI repo hiện tại và tương lai — quyết
-  định tường minh của user, đổi lấy "0 bước tay" cho mỗi project mới. Slack Bot Token thật KHÔNG
-  nằm trong nhóm "dùng chung" này — chỉ Worker giữ, mọi repo khác chỉ có `SLACK_RELAY_TOKEN`.
+- `GH_PAT` (tài khoản, quyền rộng) dùng CHUNG giá trị ở CẢ 3 nơi: Worker, repo điều phối
+  (control-plane), VÀ mọi repo onboard/bootstrap — cho MỌI repo hiện tại và tương lai. Claude auth
+  credential (OAuth token/API key) VÀ Claude GitHub App "All repositories" cũng dùng CHUNG giá trị,
+  nhưng CHỈ ở nơi thực sự chạy `claude -p`: repo điều phối (job `bootstrap-project.yml`) và mọi repo
+  online-pipeline (job `userspec-turn`/`implement`) — **Worker KHÔNG giữ Claude auth** (sửa sau
+  validation round 3 — phát hiện CRITICAL của quality: Worker là JS/TS chạy trên Cloudflare, không
+  chạy `claude -p`, không có lý do giữ credential này; Claude GitHub App "All repositories" cũng
+  không phải thứ Worker "giữ" — đó là 1 cài đặt ở cấp GitHub account, không phải secret). Quyết
+  định dùng chung GH_PAT/Claude-auth/App là tường minh của user, đổi lấy "0 bước tay" cho mỗi
+  project mới. Slack Bot Token thật KHÔNG nằm trong nhóm "dùng chung" này — chỉ Worker giữ, mọi
+  repo khác chỉ có `SLACK_RELAY_TOKEN`.
 - `project-initialization/SKILL.md` thêm 1 chế độ tự động gated bằng literal CỐ ĐỊNH
   `PROJECT_BOOTSTRAP_AUTOMATED` (không phải placeholder) — CHỈ bỏ "ask" ở ĐÚNG 1 điểm luôn có mặt
   bất kể hoàn cảnh (Step 4: "ask explicitly before pushing main"); không đổi gì khác trong skill,
@@ -288,7 +336,8 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
   với `/switch-online` đã chấp nhận ở `hybrid-local-online-pipeline`), rủi ro thấp vì chỉ xảy ra
   trong thread riêng của 1 feature.
 - **Risk 2:** Worker là thành phần public-facing DUY NHẤT (nhận webhook Slack) nhưng dùng CHUNG
-  GH_PAT/Claude-GitHub-App "All repositories" cho MỌI repo hiện tại+tương lai. **Mitigation:** chấp
+  `GH_PAT` quyền rộng với mọi repo hiện tại+tương lai (Claude GitHub App "All repositories" là cài
+  đặt GitHub-side, không phải secret Worker giữ — xem Constraints). **Mitigation:** chấp
   nhận theo quyết định tường minh của user (đổi lấy đơn giản + "0 bước tay"), không xây cơ chế phân
   quyền hẹp hơn cho v1.
 - **Risk 3:** Cloudflare Workers KV là nguồn sự thật DUY NHẤT cho mapping `channel_id<->repo` và
@@ -306,6 +355,12 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
   điều phối private, không thêm collaborator ngoài owner.
 - **Risk 5:** KHÔNG giới hạn ai trong Slack workspace được `!approve`/`/new-project`. **Mitigation:**
   chấp nhận v1 vì workspace hiện chỉ có user; rủi ro chỉ thực tế hoá nếu có thêm người khác.
+- **Risk 5b (bổ sung sau validation round 3 — phát hiện của adequacy):** `SLACK_RELAY_TOKEN` dùng
+  CHUNG 1 giá trị cho mọi repo, không có cơ chế xác thực "repo X chỉ được gọi `/relay` cho channel
+  của chính X" — secret này bị lộ ở 1 repo có thể dùng để post vào BẤT KỲ channel đã link nào, không
+  chỉ channel của repo đó. **Mitigation:** chấp nhận cùng mức rủi ro với các quyết định "dùng chung
+  credential" khác (GH_PAT, Claude auth) đã chốt — mọi repo đều do cùng 1 user sở hữu, không xây
+  cơ chế xác thực theo-từng-repo cho v1.
 - **Risk 6:** `project-initialization/SKILL.md` vốn có "ask before push main" làm lưới an toàn cuối
   cùng trước 1 hành động không thể hoàn tác dễ dàng (push lên GitHub công khai). Chế độ tự động bỏ
   qua đúng điểm này. **Mitigation:** job bootstrap LUÔN chạy trên working directory hoàn toàn mới,
@@ -338,11 +393,16 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
 - Approve code PR qua Slack: Worker gọi merge REST API TRỰC TIẾP (năng lực mới) — xác nhận qua code
   research không cần workflow/trigger mới vì `pull_request: closed` không phân biệt actor.
 - Post song song GitHub + Slack luôn luôn (không có cờ chọn 1 trong 2), để giữ GitHub làm nguồn sự
-  thật không đổi — ngoại lệ duy nhất là thông báo finalize (Slack-only, không có điểm GitHub tương
-  đương).
-- Worker dùng chung `GH_PAT`/Claude-auth/Claude-GitHub-App với toàn bộ account (không tạo
-  token/App riêng theo repo) — quyết định của user, đổi lại đơn giản hơn, đánh đổi blast-radius cao
-  hơn nếu secret Worker lộ (xem Risks).
+  thật không đổi — ngoại lệ duy nhất là thông báo "Feature xong" lúc finalize THÀNH CÔNG (Slack-only,
+  không có điểm GitHub tương đương) — sửa lại sau validation round 3 (phát hiện của skeptic và
+  quality): mô tả ban đầu sai rằng finalize không bao giờ post gì; thực ra nhánh LỖI kỹ thuật của
+  finalize (và của implement) sau khi hết retry đã có sẵn `gh issue comment`, điểm đó PHẢI mirror
+  vào Slack như mọi điểm khác, không thuộc ngoại lệ.
+- Worker dùng chung `GH_PAT` với toàn bộ account (không tạo token riêng theo repo) — quyết định
+  của user, đổi lại đơn giản hơn, đánh đổi blast-radius cao hơn nếu secret Worker lộ (xem Risks).
+  Sửa lại sau validation round 3 (phát hiện CRITICAL của quality): Worker KHÔNG giữ Claude auth hay
+  Claude GitHub App — 2 thứ đó chỉ cần ở nơi thực sự chạy `claude -p` (control-plane, mọi repo
+  online-pipeline), Worker không bao giờ chạy `claude -p`.
 - Worker là 1 instance DUY NHẤT phục vụ MỌI repo, deploy 1 lần/account (sửa lại sau khi phát hiện
   mâu thuẫn với lời hứa "0 bước tay" của `/new-project` — nếu Worker phải deploy lại mỗi repo thì
   lời hứa đó không thể giữ được) — source đặt trong repo điều phối, không vendor vào
@@ -398,6 +458,19 @@ cho feature này → báo lỗi rõ trong thread (khớp tiêu chí "`!approve` 
   phạm vi còn nhẹ.
 - Test `/new-project` lần đầu ngay trên account GitHub chính của user (không dùng account/workspace
   demo riêng) — user tự chấp nhận rủi ro tạo repo thật nếu có lỗi lúc test lần đầu.
+- Lọc `event.bot_id` bắt buộc trước khi relay/xét `!approve` (bổ sung sau validation round 3 —
+  phát hiện CRITICAL của quality): mọi message Worker tự post vào thread cũng nổ lại event
+  `message.channels` của chính nó; không lọc sẽ gây vòng lặp tự kích hoạt, kể cả tự khớp literal
+  `!approve` trong câu hướng dẫn của chính bot.
+- Thứ tự "mở thread trước, tạo issue sau" ở bước `/new-feature` giữ nguyên (không đổi sang tạo issue
+  trước) nhưng thêm xử lý lỗi rõ cho trường hợp tạo issue thất bại sau khi thread đã mở (bổ sung sau
+  validation round 3 — phát hiện của adequacy) — chọn cách này vì thread cần tồn tại trước để lấy
+  `thread_ts` nhúng vào body issue; đổi lại phải tự xử lý orphan-thread bằng 1 message lỗi vào đúng
+  thread đó, không cần rollback gì phức tạp hơn.
+- Ghi KV `channel_id->repo` TRƯỚC rồi mới post message thành công (không phải ngược lại hay song
+  song) cho bước cuối của `/new-project` (bổ sung sau validation round 3 — phát hiện của adequacy)
+  — tránh thông báo "sẵn sàng" giả khi chính bước ghi KV đó thất bại; dùng lại `/link-repo` có sẵn
+  làm đường khắc phục khi gặp đúng lỗi này, không xây cơ chế mới.
 
 ## Testing
 
@@ -421,7 +494,7 @@ thật (không phải bộ test tự động trong CI) — xem chi tiết ở Ve
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Đọc `online-pipeline/SKILL.md` sau khi sửa | Có điểm chèn gọi `POST /relay` song song với mọi `gh issue comment` hiện có (trừ finalize); literal `!approve` định nghĩa rõ, route theo status marker/PR đang mở; không đổi `on:` event của 3 workflow YAML hiện có |
+| 1. Đọc `online-pipeline/SKILL.md` sau khi sửa | Có điểm chèn gọi `POST /relay` song song với mọi `gh issue comment` hiện có — GỒM CẢ nhánh lỗi kỹ thuật của `implement`/`finalize` sau khi hết retry, không chỉ nhánh thành công (trừ ĐÚNG 1 ngoại lệ: thông báo "Feature xong" khi finalize thành công, Slack-only); literal `!approve` định nghĩa rõ, route theo cơ chế tìm PR (tính lại `slug`, tra 2 branch); không đổi `on:` event của 3 workflow YAML hiện có; có bước lọc `event.bot_id` trước khi relay/xét `!approve` |
 | 2. Đọc `project-initialization/SKILL.md` sau khi sửa | Chế độ tự động gated bằng literal cố định `PROJECT_BOOTSTRAP_AUTOMATED`; CHỈ bỏ ĐÚNG 1 "ask" ("ask explicitly before pushing main" cuối Step 4) — Step 1/Step 4-dev-branch không bị sửa gì (ask của chúng tự nhiên không kích hoạt trong bối cảnh bootstrap); Step 5 chỉ đổi đích report sang `POST /relay`, không phải bỏ "ask"; không đổi hành vi khi KHÔNG có signal này |
 | 3. Đọc workflow `bootstrap-project.yml` | KHÔNG có bước `gh repo create` TRƯỚC khi gọi `claude -p` — việc tạo repo để nguyên cho `project-initialization` Step 4 tự làm; working directory cho `claude -p` hoàn toàn trống (không checkout nội dung repo điều phối) |
 | 4. Đọc Worker source trong repo điều phối | Có verify Slack signing secret cho request từ Slack; có `POST /relay` riêng xác thực bằng `SLACK_RELAY_TOKEN` (không phải signing secret Slack); chỉ Worker gọi `chat.postMessage` bằng Slack Bot Token thật, không repo nào khác có token này; Worker tự giữ `GH_PAT` riêng để gọi GitHub REST API trực tiếp (tạo issue, `/approve` comment, merge PR); có xử lý ACK-ngay-rồi-background cho cả slash-command (`response_url`) và Events API; có `conversations.join` lúc nhận lệnh đầu tiên trong channel; đọc/ghi đúng 2 mapping KV (`channel_id<->repo`, `thread_ts<->issue`) |
@@ -481,3 +554,18 @@ bằng agent chạy 1 lần.
     kèm bước đã xong/chưa, không tự rollback repo đã tạo.
 20. Gõ `/new-project` lần 2 trong channel đã map với project A (vi phạm quy ước 1-channel-1-project)
     → xác nhận hệ thống không chặn (chạy vẫn được), chỉ là người dùng tự gây nhiễu quy ước.
+
+**Bổ sung sau validation round 3:**
+21. Trong lúc interview đang chờ trả lời, quan sát kỹ các message bot tự post (mở thread, câu hỏi,
+    hướng dẫn `!approve`) → xác nhận KHÔNG message nào trong số đó bị relay lặp lại thành
+    `gh issue comment` thứ 2, và câu hướng dẫn chứa chữ "approve" KHÔNG tự kích hoạt approve.
+22. Cố ý làm `gh issue create` lỗi ngay sau khi gõ `/new-feature` (vd rút quyền `GH_PAT` của Worker
+    tạm thời ngay sau khi thread đã mở) → xác nhận message lỗi xuất hiện ĐÚNG trong thread vừa mở,
+    không phải thread trống không ai biết vì sao.
+23. Làm `finalize` lỗi kỹ thuật thật (vd ngắt mạng giữa lúc job finalize chạy, để nó hết 3 lần retry)
+    → xác nhận message lỗi xuất hiện CẢ trên GitHub issue (như hành vi gốc) VÀ trong Slack thread
+    (năng lực mới của feature này).
+24. Cố ý làm bước ghi KV `channel_id->repo` lỗi ngay sau khi bootstrap `/new-project` thành công (vd
+    tạm revoke quyền Worker ghi KV) → xác nhận Worker báo đúng lỗi "lưu liên kết thất bại, gõ
+    /link-repo", KHÔNG báo "sẵn sàng" giả; gõ `/link-repo` sau đó khắc phục được, `/new-feature`
+    chạy đúng.
