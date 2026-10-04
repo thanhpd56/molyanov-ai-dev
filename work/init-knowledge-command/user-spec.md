@@ -64,10 +64,18 @@ ngay trên Slack/GitHub.
    - Stage bỏ qua hẳn bước "Return to Documentation Review in the main skill" của
      `create-project-knowledge.md` — tự dừng ngay sau commit + đóng issue, không quay lại menu
      chính của `documentation-writing`.
-   - Lớp bảo vệ thứ 2 (độc lập với check của Worker ở Phần B — stage này chỉ chạy khi ĐÃ có 1
-     issue `knowledge-init` tồn tại): nếu issue đang xử lý đã có `interview_metadata.status:
-     completed` (trường hợp hiếm — ví dụ issue bị reopen, hoặc 1 comment lạc vào sau khi đã đóng),
-     stage không chạy lại interview — chỉ post "đã khởi tạo rồi" rồi đóng issue lại ngay.
+   - Lớp check THẬT, có tính quyết định (khác với check "rẻ, best-effort" của Worker ở Phần B —
+     stage này chỉ chạy khi ĐÃ có 1 issue `knowledge-init` tồn tại): turn đầu tiên luôn chạy
+     đúng Phase 0 của `create-project-knowledge.md` — bước này đã có sẵn "Inspect the repository,
+     configuration, CLAUDE.md, and current Project Knowledge" để quyết định resume/bắt đầu mới.
+     Mở rộng thêm 1 kết luận cho ngữ cảnh automated này: nếu qua inspect thực tế (không chỉ dựa
+     vào field `interview_metadata.status`), Project Knowledge đã KHÔNG còn thiếu/template/
+     partial — dù do chính flow này hoàn tất trước đó, do mode "full update/audit" của
+     `documentation-writing`, hay do sửa tay trực tiếp — stage không chạy interview: chỉ post
+     "đã khởi tạo rồi" rồi đóng issue ngay. Đây là lớp chặn chính xác nhất, bắt được MỌI trường
+     hợp "đã hoàn chỉnh" chứ không chỉ trường hợp field status đã set (cái mà Worker's check ở
+     Phần B chỉ bắt được 1 phần). Cũng áp dụng cho issue bị reopen hoặc 1 comment lạc vào sau khi
+     đã đóng.
    - `online-pipeline-userspec.yml`'s route job thêm 1 điều kiện bỏ qua issue/comment mang label
      `knowledge-init`, cùng cách nó đang bỏ qua `local-placeholder`.
    - Lỗi/crash: theo đúng pattern retry đã có (tối đa 2 lần retry, rồi báo lỗi qua `gh issue
@@ -106,15 +114,23 @@ ngay trên Slack/GitHub.
    đã link với 1 repo (mới hoặc cũ), miễn Project Knowledge của repo đó còn thiếu/template/
    partial — cùng pattern với `/new-feature` (ACK <3s, tạo label `knowledge-init` defensively nếu
    repo đó chưa có, mở thread trước để có `thread_ts`, tạo issue `knowledge-init` với marker, relay
-   câu hỏi đầu tiên). Trước khi làm bất kỳ hành động nào trên GitHub, Worker kiểm tra qua GitHub
-   API (đọc `work/project-knowledge/interview.yml` và danh sách issue mở của repo đó):
-   - Nếu repo đã có `interview_metadata.status: completed` → **không tạo issue nào cả, không mở
-     thread nào cả** — chỉ trả lời ngay qua Slack (response/thread hiện có) "đã khởi tạo rồi".
+   câu hỏi đầu tiên). Trước khi làm bất kỳ hành động nào trên GitHub, Worker làm 2 check rẻ, có
+   tính best-effort (không phải nguồn sự thật duy nhất — xem lớp check thật ở Phần A item 2 bên
+   dưới):
+   - Nếu repo đã có `interview_metadata.status: completed` (đọc qua GitHub API) → **không tạo
+     issue nào cả, không mở thread nào cả** — chỉ trả lời ngay qua Slack (response/thread hiện
+     có) "đã khởi tạo rồi". Check này chỉ bắt được đúng trường hợp Project Knowledge được hoàn
+     tất CHÍNH bằng flow này trước đó; 1 repo cũ có Project Knowledge đầy đủ qua đường khác (mode
+     "full update/audit" của `documentation-writing`, hoặc sửa tay) sẽ không có field này —
+     trường hợp đó vẫn tạo issue, nhưng lớp check thật ở Phần A item 2 (Phase 0 của
+     `create-project-knowledge.md` tự inspect repo) sẽ phát hiện và tự đóng ngay, không chạy
+     interview. Worker's check ở đây chỉ là tối ưu để tránh tạo issue/thread không cần thiết cho
+     trường hợp phổ biến nhất, không phải điều kiện bắt buộc đúng 100%.
    - Nếu repo đã có 1 issue `knowledge-init` đang mở (interview đang chạy) → **không tạo issue/
      thread thứ 2** — chỉ trả lời ngay qua Slack "đang chạy rồi, xem issue #{number}".
-   - Hai bước kiểm tra này là "check rồi mới act", có 1 khoảng hở nhỏ nếu gọi lệnh 2 lần gần như
-     đồng thời (race) — chấp nhận như 1 rủi ro hiếm, cùng mức với các race hiếm khác đã được chấp
-     nhận trong `slack-pipeline-interaction` (xem Risks).
+   - Cả 2 check trên là "check rồi mới act", có 1 khoảng hở nhỏ nếu gọi lệnh 2 lần gần như đồng
+     thời (race) — chấp nhận như 1 rủi ro hiếm, cùng mức với các race hiếm khác đã được chấp nhận
+     trong `slack-pipeline-interaction` (xem Risks).
    Command này KHÔNG phải công cụ audit lại Project Knowledge đã hoàn chỉnh — nó chỉ chạy đúng
    `create-project-knowledge.md`, không chạy mode "full update/audit" của `documentation-writing`.
    **Điều kiện tiên quyết cho repo cũ:** repo đó phải đã re-vendor `online-pipeline` (chạy lại
@@ -145,10 +161,18 @@ ngay trên Slack/GitHub.
   slash command thủ công.
 - [ ] Slash command Slack chạy được trên repo cũ còn thiếu/template/partial Project Knowledge,
   đúng luồng như trên.
-- [ ] Slash command Slack gọi trên repo đã có Project Knowledge hoàn chỉnh → Worker không tạo
-  issue/thread nào, chỉ trả lời ngay qua Slack "đã khởi tạo rồi", không báo lỗi.
+- [ ] Slash command Slack gọi trên repo mà `interview_metadata.status` đã là `completed` → Worker
+  không tạo issue/thread nào, chỉ trả lời ngay qua Slack "đã khởi tạo rồi", không báo lỗi.
+- [ ] Slash command Slack gọi trên repo cũ có Project Knowledge đã đầy đủ qua đường KHÁC (mode
+  "full update/audit", hoặc sửa tay — không có `interview_metadata.status: completed`) → Worker
+  tạo issue như thường (check của Worker không bắt được trường hợp này), nhưng turn đầu tiên của
+  stage `knowledge-init` tự inspect (Phase 0 của `create-project-knowledge.md`) phát hiện đã đầy
+  đủ, không chạy interview — chỉ post "đã khởi tạo rồi" rồi đóng issue ngay.
 - [ ] Slash command Slack gọi lần 2 khi đã có issue `knowledge-init` đang mở cho repo đó → Worker
   không tạo issue/thread thứ 2, chỉ trả lời ngay qua Slack rằng issue đó đang mở.
+- [ ] Nếu `/relay` lỗi lúc `bootstrap-project.yml` mở message Slack đầu tiên: issue `knowledge-init`
+  vẫn được tạo bình thường trên GitHub (không phụ thuộc Slack thành công), chỉ thiếu marker Slack
+  trong body — các lần `relay_to_slack` sau no-op, interview vẫn tiếp tục đúng qua GitHub comment.
 - [ ] `claude -p` lỗi/crash trong stage `knowledge-init` → retry tối đa 2 lần, rồi báo lỗi qua
   `gh issue comment` + Slack, issue vẫn mở, không rollback. (Xác nhận bằng cách đọc workflow YAML:
   cấu trúc retry-loop phải khớp với `online-pipeline-implement.yml`/`online-pipeline-finalize.yml`
@@ -172,9 +196,11 @@ ngay trên Slack/GitHub.
   tạo group riêng cho `knowledge-init`) — cả hai cùng commit thẳng Project Knowledge vào `main`,
   nên phải serialize với nhau, không chỉ serialize với chính mình.
 - Mỗi turn: commit+push thẳng `main` phải là hành động CUỐI CÙNG của lần chạy đó, không có bước
-  nào chạy sau — đúng luật đã có sẵn ở mọi stage khác ("viết/commit status trước khi exit, không
-  bao giờ sau khi push"). Nhờ vậy retry chỉ có thể xảy ra ở lần chạy CHƯA commit thành công; không
-  bao giờ retry sau khi 1 turn đã commit xong, nên không có nguy cơ hỏi lại/trả lời trùng câu hỏi.
+  nào chạy sau — đúng luật `userspec-turn`/`finalize` đã áp dụng (viết/commit state trước khi
+  exit, không bao giờ sau khi push). Lưu ý: `implement`'s nhánh `awaiting_decision` làm ngược lại
+  (post comment/relay SAU khi đã commit+push) — `knowledge-init` cố tình theo đúng thứ tự của
+  `userspec-turn`/`finalize`, không theo `implement`, vì thứ tự này mới đảm bảo retry không bao
+  giờ xảy ra sau khi 1 turn đã commit xong (tránh nguy cơ hỏi lại/trả lời trùng câu hỏi).
 - Slash command Slack trên repo cũ chỉ hoạt động đúng nếu repo đó đã re-vendor `online-pipeline`
   sau khi feature này merge (xem Expected Behavior Phần B item 5) — không phải yêu cầu mới, chỉ là
   quy ước maintenance có sẵn được áp dụng cho đúng.
@@ -220,6 +246,12 @@ ngay trên Slack/GitHub.
   tạo 2 issue/thread cho cùng 1 repo. **Mitigation:** chấp nhận như rủi ro hiếm, cùng mức với các
   race hiếm khác đã được chấp nhận trong `slack-pipeline-interaction` (không xây thêm cơ chế lock
   mới cho v1).
+- **Risk 7:** Nếu repo cũ chưa re-vendor `online-pipeline` mà vẫn gọi slash command, issue
+  `knowledge-init` vẫn được tạo nhưng route job cũ (chưa có điều kiện bỏ qua label mới) có thể
+  hiểu nhầm đây là issue `/new-feature` và tự chạy `user-spec-planning` trên nó. **Mitigation:**
+  chấp nhận cho v1 — đây là hệ quả tất yếu của quy ước maintenance có sẵn (mọi update
+  `online-pipeline` đều cần repo cũ tự re-vendor), không phải lỗi riêng của feature này; command
+  không tự kiểm tra/cảnh báo trước, xem Constraints.
 
 ## Accepted Decisions
 
@@ -250,11 +282,15 @@ ngay trên Slack/GitHub.
   người dùng chủ động mở rộng sang "dùng được cho repo cũ cũng tốt" (Q17-19) — quyết định cuối: giữ
   đúng điều kiện gốc của `create-project-knowledge.md` (thiếu/template/partial), chỉ bỏ giới hạn
   thời điểm, không biến thành lệnh audit chung. Worker check trước khi tạo bất kỳ thứ gì trên
-  GitHub: repo đã hoàn chỉnh → không tạo issue, chỉ báo qua Slack, không lỗi; repo đang chạy
-  interview → không tạo issue thứ 2, chỉ báo đang chạy.
+  GitHub, nhưng chỉ là check RẺ, best-effort (dựa trên field `interview_metadata.status`, không
+  tự inspect nội dung thật): nếu field đó đã `completed` → không tạo issue, chỉ báo qua Slack,
+  không lỗi; nếu đã có issue đang mở → không tạo issue thứ 2, chỉ báo đang chạy. Lớp check THẬT,
+  có tính quyết định, nằm ở turn đầu tiên của stage `knowledge-init` (Phase 0 của
+  `create-project-knowledge.md` tự inspect repo) — bắt được cả trường hợp Worker's check bỏ lọt
+  (Project Knowledge hoàn chỉnh qua đường khác, không có field status).
 - Chi tiết API `/relay` (có trả `ts` sẵn hay cần sửa Worker) để lại làm quyết định kỹ thuật lúc
   thực thi Phần B — không chốt cứng ở user-spec vì source Worker không có trong working directory
-  hiện tại.
+  hiện tại. Nếu `/relay` lỗi, `bootstrap-project.yml` vẫn tạo issue (không phụ thuộc Slack).
 
 ## Testing
 
@@ -281,7 +317,8 @@ tương tự cách `slack-pipeline-interaction` đã được verify.
 | 3b. Đọc retry-loop của workflow mới | Cấu trúc retry (đếm lần thử, reset về `origin/main` khi lỗi, báo lỗi qua `gh issue comment` + `relay_to_slack` sau khi hết lần thử, không rollback) khớp với retry-loop hiện có của `online-pipeline-implement.yml`/`online-pipeline-finalize.yml`. |
 | 4. Đọc `project-initialization/assets/new-project/` sau khi vendor | Workflow mới có mặt ở cả `.github/workflows/` và `.claude/skills/online-pipeline/assets/workflows/`; `vendor-skills.sh`'s `WORKFLOWS` array có tên file mới. |
 | 5. Chạy thử local: gõ "/init-knowledge" trên 1 project test thiếu Project Knowledge | `create-project-knowledge.md`'s Phase 0 bắt đầu ngay, không hỏi thêm bước routing nào. |
-| 6. `git diff`/`git log` trong `control-plane` sau khi sửa (ở thư mục clone riêng) | `bootstrap-project.yml` có bước mở Slack message mới + tạo issue `knowledge-init` ngay sau bước vendor secret hiện có; Worker có route mới cho slash command, có check "đã completed"/"đã có issue mở" trước khi tạo issue. |
+| 6. `git diff`/`git log` trong `control-plane` sau khi sửa (ở thư mục clone riêng) | `bootstrap-project.yml` có bước mở Slack message mới + tạo issue `knowledge-init` ngay sau bước vendor secret hiện có, VÀ vẫn tạo issue (chỉ thiếu marker) nếu `/relay` lỗi; Worker có route mới cho slash command, có check "đã completed"/"đã có issue mở" trước khi tạo issue (2 check này chỉ là best-effort, không cần hoàn hảo). |
+| 7. Đọc Phase 0 phần mở rộng trong `online-pipeline/SKILL.md`'s mục Stage `knowledge-init` | Có mô tả rõ: turn đầu tiên luôn chạy Phase 0 của `create-project-knowledge.md` để tự inspect; nếu Project Knowledge thực tế đã không còn thiếu/template/partial (bất kể lý do, bất kể field `interview_metadata.status`), stage post "đã khởi tạo rồi" rồi đóng issue ngay, không chạy interview — đây là lớp check có tính quyết định, khác với check rẻ của Worker ở bước 6. |
 
 ### User Verification
 
@@ -296,5 +333,9 @@ tương tự cách `slack-pipeline-interaction` đã được verify.
   `setup-online-pipeline.sh` sau khi feature này merge), rồi gọi slash command Slack thủ công trên
   repo đó còn thiếu Project Knowledge — xác nhận luồng chạy giống hệt trường hợp tự động (kể cả
   việc label `knowledge-init` tự được tạo trên repo đó nếu chưa có). Gọi lại trên repo đã hoàn tất
-  — xác nhận Worker chỉ trả lời "đã khởi tạo rồi" qua Slack, không tạo issue/thread mới, không
-  chạy lại interview.
+  (có `interview_metadata.status: completed`) — xác nhận Worker chỉ trả lời "đã khởi tạo rồi" qua
+  Slack, không tạo issue/thread mới, không chạy lại interview.
+- Gọi slash command trên 1 repo cũ có Project Knowledge đã đầy đủ nhưng KHÔNG qua
+  `create-project-knowledge.md` (ví dụ xoá/không có `work/project-knowledge/interview.yml`) —
+  xác nhận Worker's check rẻ không bắt được (vẫn tạo issue), nhưng turn đầu tiên của stage tự
+  inspect và phát hiện đã đầy đủ, post "đã khởi tạo rồi" rồi đóng issue ngay, không chạy interview.
