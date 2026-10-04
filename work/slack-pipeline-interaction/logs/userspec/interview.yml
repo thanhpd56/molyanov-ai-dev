@@ -1,0 +1,755 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-04 00:00:00"
+  last_updated: "2026-10-04 02:50:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
+conversation_history:
+  - asked_at: "2026-10-04 00:05:00"
+    topic_keys: ["feature_description", "integration_points", "technical_constraints", "deploy_approach", "target_users"]
+    agent_questions: |
+      1. Phạm vi thay thế: Slack thay thế hoàn toàn kênh hỏi-đáp (interview Q&A ở userspec-turn,
+         và các câu hỏi awaiting_decision lúc implement), hay chỉ thêm Slack như kênh song
+         song/mirror bên cạnh GitHub issue comment? PR review/merge code vẫn giữ trên GitHub, hay
+         cũng muốn approve được từ Slack?
+      2. Cầu nối kỹ thuật: Slack không tự kích hoạt GitHub Actions như issue_comment event được.
+         (a) GitHub Actions polling theo lịch (cron) để nhận message mới từ Slack API, không cần
+         host server riêng, hay (b) Slack Events API/App với webhook thật cần 1 endpoint public
+         luôn chạy (serverless hoặc server)?
+      3. Mapping feature <-> Slack: mỗi feature 1 thread riêng trong 1 channel cố định, hay mỗi
+         feature 1 channel riêng? Bắt đầu feature mới từ Slack bằng cách nào — slash command, hay
+         Slack chỉ là kênh theo dõi/trả lời sau khi feature đã bắt đầu từ local/GitHub?
+      4. Auth & danh tính: chưa có Slack app/workspace nào, đúng không? Có cần giới hạn ai trong
+         workspace được phép trả lời/approve không?
+    user_answer: |
+      3. channel đi, dùng 1 command.
+      4 chưa có app. không cần giới hạn user..
+  - asked_at: "2026-10-04 00:10:00"
+    topic_keys: ["integration_points", "technical_constraints", "deploy_approach", "manual_user_actions"]
+    agent_questions: |
+      1. "Command" là gì cụ thể: Slack slash command thật (cần 1 serverless function/endpoint
+         luôn sẵn sàng nhận HTTP request đồng bộ từ Slack), hay chỉ là gõ 1 dòng tin nhắn thường
+         theo cú pháp cố định mà 1 job GitHub Actions polling định kỳ tự nhận diện?
+      2. Phạm vi thay thế (lặp lại, chưa được trả lời ở batch trước): Slack dùng cho toàn bộ
+         tương tác (hỏi-đáp, awaiting_decision, VÀ approve spec/merge code PR), hay PR
+         review/merge code vẫn giữ nguyên trên GitHub?
+      3. Tạo channel: hệ thống tự tạo channel qua Slack API, hay người dùng tự tay tạo channel
+         trước?
+      4. Setup ban đầu: người dùng sẽ tự tạo Slack App (api.slack.com/apps) và có quyền admin
+         workspace, đúng không?
+    user_answer: |
+      1. ok dựng 1 serverless function.
+      2. vẫn làm trên slack, có link để tôi review mr changes trên git sau đó tôi có thể back lại
+         slack để approve. Đại loại giống kiểu chat bây giờ.
+      3. tự tạo
+      4. ok
+  - asked_at: "2026-10-04 00:15:00"
+    topic_keys: ["integration_points", "technical_constraints", "deploy_approach", "manual_user_actions"]
+    agent_questions: |
+      1. Xác nhận "tự tạo" channel = hệ thống tự tạo qua Slack API (bot có quyền channels:manage),
+         không phải người dùng tự tay tạo trước?
+      2. Approve code PR: (a) Slack approve kích hoạt merge thật qua gh pr merge (năng lực mới,
+         chưa tồn tại hiện nay), hay (b) code PR giữ nguyên hiện trạng (chỉ gửi link, người dùng
+         tự bấm Merge trên GitHub UI)?
+      3. Nền tảng serverless: có tài khoản/ưu tiên sẵn (Cloudflare Workers, Vercel, AWS Lambda),
+         hay để đề xuất phương án đơn giản nhất?
+      4. Phạm vi bật/tắt: bật 1 lần cho cả repo (giống online-pipeline Setup), hay theo từng
+         feature riêng?
+    user_answer: |
+      1. À tôi đổi ý, đổi sang thread thôi. Sau này tôi muốn 1 dự án 1 channel và 1 feature 1
+         thread trên slack. Hoặc nếu dùng channel cho mỗi feature, bạn xem có cách gì để gom các
+         features của 1 dự án vào 1 với slack plan free.
+      2. a
+      3. Cloudflare Workers — free tier tôi có sẵn tk rồi.
+      4. theo cả repo.
+  - asked_at: "2026-10-04 00:30:00"
+    topic_keys: ["data_requirements", "integration_points", "technical_constraints"]
+    agent_questions: |
+      (Sau code research xác nhận: không cần workflow GitHub Actions mới cho merge code PR qua
+      Slack — Worker gọi trực tiếp REST API merge, trigger pull_request:closed hiện có tự nổ bình
+      thường.)
+      1. Đề xuất mapping thread<->feature: nhúng channel_id+thread_ts vào BODY của GitHub issue
+         lúc Worker tạo issue (Actions đọc được luôn, không cần file riêng); chiều ngược lại
+         (Slack event -> issue nào) lưu trong Cloudflare Workers KV do Worker tự ghi lúc tạo
+         issue. Đồng ý cách này không?
+      2. Chế độ post: song song cả 2 nơi (gh issue comment NHƯ CŨ + thêm chat.postMessage vào
+         thread), hay chỉ Slack (ngừng hẳn comment GitHub)?
+      3. Cơ chế approve trong thread: nút bấm Block Kit (tách biệt hẳn khỏi tin nhắn thường), hay
+         gõ tin nhắn chữ thường?
+      4. Token cho Worker (public-facing, rủi ro lộ cao hơn): dùng lại GH_PAT đã tạo cho
+         online-pipeline, hay tạo riêng token/App phạm vi hẹp hơn?
+    user_answer: |
+      1 ok
+      2 song song đồng bộ nhau
+      3. dùng tin nhắn
+      4 dùng chung
+  - asked_at: "2026-10-04 00:40:00"
+    topic_keys: ["technical_decisions", "error_scenarios", "deploy_approach"]
+    agent_questions: |
+      1. Từ khoá approve: dùng chung literal "/approve" cho cả spec PR và code PR (Worker tự biết
+         đang ở giai đoạn nào qua status marker để route đúng), hay 2 từ khoá riêng?
+      2. Độ tin cậy 1 chiều lỗi: Worker lỗi relay Slack->GitHub thì báo lỗi trong Slack, không tự
+         retry; Actions lỗi post GitHub->Slack thì best-effort, không chặn stage. OK không?
+      3. Thông báo finalize: hiện tại online-pipeline không post gì khi finalize xong. Thêm message
+         "Feature xong" vào thread lúc finalize (năng lực mới), hay giữ im lặng như hiện tại?
+    user_answer: |
+      1.dùng !approve đi, nếu không trùng slash của slack
+      2. ok
+      3 có thông báo
+  - asked_at: "2026-10-04 01:00:00"
+    topic_keys: ["integration_points", "manual_user_actions"]
+    agent_questions: |
+      1. Channel 1/project tạo 1 lần: đề xuất user tự tạo tay (bot chỉ cần chat:write, không
+         channels:manage). Đồng ý không?
+    user_answer: |
+      "Có cách gì để tôi khởi tạo 1 projec từ trong slack chat, rồi khởi tạo feature mới trong
+      channel đó luôn." (yêu cầu mở rộng phạm vi: bootstrap project mới từ Slack, không chỉ repo
+      đã có sẵn)
+  - asked_at: "2026-10-04 01:05:00"
+    topic_keys: ["feature_description", "integration_points"]
+    agent_questions: |
+      Giải thích 2 mức "khởi tạo project": (nhẹ) chỉ nối channel vào repo đã tồn tại — trong
+      phạm vi hiện tại; (nặng) tạo repo GitHub hoàn toàn mới qua Slack — cần kiến trúc khác (Worker
+      đa-repo/GitHub App, bootstrap non-interactive cho project-initialization). Hỏi: giữ phạm vi
+      ở mức nhẹ (tách mức nặng ra 1 user-spec sau), hay gộp luôn mức nặng vào spec này?
+    user_answer: "2 (gộp luôn mức nặng)"
+  - asked_at: "2026-10-04 01:10:00"
+    topic_keys: ["integration_points", "technical_constraints", "deploy_approach"]
+    agent_questions: |
+      Đề xuất kiến trúc bootstrap project mới: Worker không tự tạo repo (không có git/gh CLI thật
+      trong Worker) — chỉ bắn repository_dispatch sang 1 workflow GitHub Actions thật (có gh CLI)
+      để làm việc tạo repo/scaffold/set secrets. 4 câu: (1) chạy bootstrap ngay trong
+      molyanov-ai-dev hay 1 repo điều phối riêng? (2) repo mới tạo dưới account nào, private
+      mặc định? (3) giữ flow channel tự tạo tay + gõ /new-project trong đó? (4) Worker dùng 1
+      credential DUY NHẤT có quyền ghi mọi repo (hiện tại+tương lai) — chấp nhận đánh đổi rủi
+      ro/đơn giản này?
+    user_answer: "1 tạo mới 1 repo điều phối. 2 đung. 3 ok. 4 ok chap nhan"
+  - asked_at: "2026-10-04 01:15:00"
+    topic_keys: ["integration_points", "technical_decisions"]
+    agent_questions: |
+      1. Mức độ scaffold bootstrap: (a) chỉ cơ học (copy file, không claude -p, không cần sửa
+         project-initialization) hay (b) chạy claude -p project-initialization thật trong job
+         bootstrap (cần sửa thêm skill đó để hỗ trợ tự động)?
+      2. Xác nhận bootstrap tự vendor+set secret cho CẢ online-pipeline VÀ Slack cho repo mới,
+         không cần chạy script tay ở local?
+      3. Tên repo điều phối — đề xuất hay tự đặt?
+    user_answer: "2 ok. 3 ok" (câu 1 chưa trả lời, hỏi lại riêng)
+  - asked_at: "2026-10-04 01:20:00"
+    topic_keys: ["integration_points", "technical_decisions"]
+    agent_questions: "Lặp lại câu 1 trên (chưa được trả lời): (a) scaffold cơ học hay (b) claude -p project-initialization thật, cần sửa skill đó?"
+    user_answer: "b"
+  - asked_at: "2026-10-04 01:25:00"
+    topic_keys: ["feature_description"]
+    agent_questions: |
+      Phạm vi đã phình to gồm 2 mảng giá trị tách được (A: Slack cho repo đã có; B: khởi tạo
+      project mới qua Slack, phụ thuộc A). Hỏi: tách thành 2 user-spec riêng (A trước, B sau), hay
+      giữ chung 1 spec lớn?
+    user_answer: "Giữ chung 1 spec lớn"
+  - asked_at: "2026-10-04 01:30:00"
+    topic_keys: ["manual_user_actions", "technical_constraints", "risks"]
+    agent_questions: |
+      Với lựa chọn (b), setup-online-pipeline.sh có 1 bước thủ công không script hoá được (cài
+      Claude GitHub App cho repo, qua browser). Đề xuất: cài app ở mức "All repositories" trên
+      account GitHub 1 LẦN DUY NHẤT lúc setup control-plane, để mọi repo mới tự động được cover,
+      không cần cài lại tay mỗi lần /new-project. Đồng ý cách này, hay giữ cài theo từng repo (an
+      toàn hơn nhưng phá vỡ mục tiêu "0 bước tay")?
+    user_answer: "đồng ý cài Claude GitHub App ở mức \"All repositories\""
+  - asked_at: "2026-10-04 01:45:00"
+    topic_keys: ["verification_strategy", "testing_strategy", "target_users", "risks", "manual_user_actions"]
+    agent_questions: |
+      (Sau interview-completeness-checker, 3 gap cần quyết trực tiếp:)
+      1. Test /new-project lần đầu trên account GitHub chính hay account/workspace demo riêng
+         (tránh rủi ro tạo repo thật ngoài ý muốn)?
+      2. Giữ "không giới hạn ai trong Slack workspace" cho CẢ !approve (merge code thật trực
+         tiếp) VÀ /new-project (tạo repo + tốn credential quyền rộng toàn account), hay giới hạn
+         lại (ví dụ 1 Slack user ID cụ thể)?
+      3. Bot Slack: chỉ chat:write (user tự tạo channel tay), hay cần channels:manage (bot tự tạo
+         channel)? — hỏi lại lần 3 vì 2 lần trước chưa được trả lời rõ.
+    user_answer: "1 acc chính. 2 ko gioi han 3, tao channel tay"
+  - asked_at: "2026-10-04 02:00:00"
+    topic_keys: ["integration_points", "data_requirements", "manual_user_actions", "deploy_approach"]
+    agent_questions: |
+      (Sau completeness-check lần 2: phát hiện mâu thuẫn Worker-deploy-mỗi-repo (Phần A) vs
+      "0 bước tay" cho repo mới (Phần B); và lỗ thiết kế thật: chưa có mapping channel<->repo cho
+      Worker đa-repo.) Đề xuất sửa: (1) Worker deploy ĐÚNG 1 LẦN/account, phục vụ mọi repo — không
+      redeploy mỗi repo; (2) thêm mapping channel_id<->repo trong Cloudflare KV, Worker tự ghi lúc
+      /new-project (biết sẵn channel+tên repo); với repo ĐÃ TỒN TẠI (onboard qua setup script cục
+      bộ như cũ), thêm lệnh Slack mới "/link-repo <owner>/<name>" gõ 1 lần trong channel đó để ghi
+      mapping này. Đồng ý cách sửa này?
+    user_answer: "Xong chua?" (chấp nhận đề xuất của agent theo mặc định do muốn kết thúc interview; agent tự áp dụng và ghi nhận quyết định ở trên)
+  - asked_at: "2026-10-04 02:30:00"
+    topic_keys: ["technical_constraints", "manual_user_actions", "error_scenarios"]
+    agent_questions: |
+      (Sau completeness-check lần 3, 2 gap kỹ thuật cần xác nhận — đều là cách làm chuẩn của mọi
+      app Slack, không phải đánh đổi sản phẩm khó):
+      1. Scope bot thiếu: chat:write chỉ cho phép POST, không cho phép Worker NHẬN tin nhắn thường
+         trong channel (cần thêm channels:history, và bot phải là MEMBER của channel đó mới nhận
+         được event). Đề xuất: thêm scope channels:join — Worker tự gọi conversations.join để tự
+         vào channel ngay khi nhận lệnh slash-command đầu tiên (/new-project hoặc /link-repo) tại
+         channel đó, không cần bạn tự tay invite bot. Đồng ý thêm 2 scope này (channels:history,
+         channels:join) + Worker tự auto-join, hay bạn muốn tự tay invite bot vào mỗi channel
+         (không cần channels:join, nhưng thêm 1 bước tay mỗi project)?
+      2. Slack giới hạn slash-command phải trả lời trong ~3 giây, nhưng /new-feature, /new-project,
+         /link-repo đều làm việc chậm hơn (gọi GitHub API, ghi KV) ngay trong request đó. Đề xuất
+         chuẩn: Worker trả lời ngay (ack tức thì, ví dụ "⏳ Đang xử lý...") rồi làm việc thật ở
+         background (Cloudflare `waitUntil`), xong thì gửi kết quả thật qua `response_url` của
+         Slack (tin nhắn riêng, không phải trong response ban đầu). Đồng ý cách này?
+    user_answer: "done? (chấp nhận 2 đề xuất mặc định của agent do muốn kết thúc interview; agent tự áp dụng)"
+
+general_understanding:
+  feature_name:
+    score: 90
+    value: "slack-pipeline-interaction — tương tác với online-pipeline qua Slack thay vì chỉ qua GitHub issue"
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 85
+    value: |
+      PHẦN A — Tương tác Slack cho repo đã bật online-pipeline: mở rộng
+      skills/online-pipeline/SKILL.md, 1 channel cố định/project (tạo tay 1 lần), 1 thread/feature.
+      Slash command bắt đầu feature mới (tạo GitHub issue, nhúng channel_id+thread_ts vào body).
+      Toàn bộ tương tác (interview Q&A, awaiting_decision, approve spec PR, approve/merge code PR)
+      làm được từ Slack — post song song GitHub (gh issue comment, như cũ) VÀ Slack
+      (chat.postMessage vào đúng thread). Approve dùng literal "!approve" gõ trong thread (không
+      phải slash-command thật), Worker tự route theo status marker: spec-PR thì giả lập comment
+      "/approve" lên PR (tái dùng route job cũ nguyên vẹn); code-PR thì gọi merge REST API trực
+      tiếp (năng lực mới, không cần workflow/trigger mới vì pull_request:closed không phân biệt
+      actor). Cầu nối là 1 Cloudflare Worker (free tier) nhận Slack event/slash-command, verify
+      signing secret, gọi GitHub API. Mapping: thread<->feature nhúng trong body issue (Actions
+      đọc trực tiếp); chiều Slack-event->issue lưu Cloudflare KV (Worker tự ghi lúc tạo issue).
+
+      PHẦN B — Khởi tạo project GitHub hoàn toàn mới từ Slack (/new-project): 1 repo điều phối
+      (control-plane) MỚI, riêng biệt, chứa 1 GitHub Actions workflow nhận repository_dispatch từ
+      Worker (dùng chung credential với Phần A). Workflow đó: gh repo create (account hiện tại,
+      private), chạy claude -p thật với skill project-initialization (cần sửa skill này thêm 1 chế
+      độ tự động — bỏ các bước "ask" vì bootstrap luôn chạy trên thư mục trống/origin chưa tồn tại,
+      tự push main không hỏi), rồi tự vendor + set secrets cho CẢ online-pipeline VÀ Slack
+      integration của Phần A trên repo mới (copy GH_PAT, Claude auth credential, VÀ SLACK_BOT_TOKEN
+      — sửa sau completeness-check lần 4, cần cho chính repo mới tự gọi Slack API — dùng chung từ
+      control-plane) — không cần chạy script tay ở local. Claude GitHub App cài 1 LẦN ở mức "All
+      repositories" trên account, nên repo mới tự động được cover, không cần cài lại tay. User tự
+      tạo channel Slack cho project mới TRƯỚC, gõ /new-project NGAY TRONG channel đó.
+
+      Quyết định: giữ CHUNG 1 user-spec cho cả A và B (user đã xác nhận, dù 2 mảng tách được).
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 80
+    value: |
+      Hiện tại online-pipeline chỉ tương tác qua GitHub issue/PR comment — người dùng phải mở
+      GitHub (web/app) để trả lời câu hỏi interview, xem awaiting_decision, hay approve. Người
+      dùng muốn làm việc này ngay trong Slack (nơi họ đã quen chat), chỉ ra GitHub khi cần xem
+      diff code thật.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 85
+    value: |
+      Người dùng solo (chủ repo/account GitHub + chủ Slack workspace) — KHÔNG phân quyền trong
+      Slack workspace, đã XÁC NHẬN LẠI sau khi phạm vi mở rộng sang merge code trực tiếp qua
+      !approve và tạo repo mới qua /new-project (2 năng lực mạnh, tiêu tốn credential quyền rộng
+      toàn account): user vẫn chủ động chấp nhận không giới hạn, vì thực tế workspace chỉ có
+      mình user. Rủi ro chỉ phát sinh nếu sau này có thêm người khác vào workspace — ghi nhận ở
+      Risks, không xây cơ chế giới hạn cho v1.
+    gaps: []
+    required: false
+
+  success_criteria:
+    score: 85
+    value: |
+      - Gõ slash command (ví dụ /new-feature) trong channel project trên Slack -> GitHub issue
+        mới xuất hiện (body nhúng channel_id+thread_ts), thread mới xuất hiện trong channel đó,
+        userspec-turn chạy và post câu hỏi đầu tiên vào ĐÚNG thread (và đồng thời gh issue comment
+        như cũ).
+      - Trả lời câu hỏi bằng tin nhắn thường trong thread -> Worker relay thành gh issue comment,
+        interview tiến triển đúng, câu hỏi tiếp theo xuất hiện lại trong Slack VÀ GitHub.
+      - Lúc awaiting_decision (implement) -> câu hỏi/finding xuất hiện trong thread.
+      - Gõ "!approve" trong thread lúc spec PR đang chờ review -> spec PR được approve+merge thật
+        (giống hệt hành vi /approve comment hiện có), implement bắt đầu, xác nhận xuất hiện trong
+        thread.
+      - Gõ "!approve" trong thread lúc code PR đang chờ review -> code PR được merge thật qua
+        Worker gọi REST API trực tiếp (năng lực mới), finalize chạy, xác nhận xuất hiện trong
+        thread.
+      - Finalize xong -> message "Feature xong" xuất hiện trong thread (năng lực mới).
+      - PHẦN B: tự tạo channel Slack tay cho project mới, gõ /new-project <tên-repo> trong đó ->
+        repo GitHub mới xuất hiện (private, account hiện tại), đã chạy project-initialization đầy
+        đủ (main+dev, hooks), đã tự vendor+set-secret online-pipeline VÀ Slack, sẵn sàng
+        /new-feature ngay trong channel đó — không cần chạy script/terminal nào ở local.
+    gaps: []
+    required: true
+
+  constraints:
+    score: 85
+    value: |
+      Cầu nối bắt buộc dùng Cloudflare Workers (free tier, đã có account) — không dùng server
+      luôn chạy khác. Bật Slack integration 1 lần cho cả repo (giống cách online-pipeline Setup
+      hiện có), không bật/tắt theo từng feature riêng. Không giới hạn user nào trong workspace
+      được trả lời/approve. Tái dùng naming contract/route job hiện có của online-pipeline tối
+      đa — XÁC NHẬN qua code research: KHÔNG cần đổi `on:` event hay thêm workflow YAML mới nào
+      cả, vì (a) approve spec PR qua Slack chỉ là giả lập lại đúng comment "/approve" hiện có lên
+      PR, route job cũ xử lý y nguyên; (b) approve/merge code PR qua Slack là Worker gọi trực tiếp
+      REST API merge, trigger pull_request:closed hiện có tự nổ không phân biệt actor. Dùng
+      literal "!approve" (không phải "/approve") làm lệnh approve trong tin nhắn Slack, để không
+      trùng cú pháp slash-command thật của Slack. Post song song cả 2 nơi (gh issue comment + Slack
+      thread) ở MỌI điểm hiện tại đã có gh issue comment (userspec-turn, implement,
+      awaiting_decision) — NGOẠI LỆ: thông báo "Feature xong" lúc finalize là Slack-ONLY (năng lực
+      mới, finalize hiện tại không gọi gh issue comment ở bước nào cả, xác nhận qua code research),
+      không phải vi phạm nguyên tắc song song. Lỗi relay 1 chiều không retry phức tạp — báo lỗi rõ,
+      Slack post lỗi coi là best-effort (không chặn stage).
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 60
+    value: |
+      Giống tiền lệ hybrid-local-online-pipeline: không có unit test tự động cho phần
+      YAML/SKILL.md (văn bản điều phối thuần, không có logic cô lập được). Khác biệt: Cloudflare
+      Worker LÀ code mới (JS/TS) — các hàm thuần (verify Slack signing secret, parse payload, xác
+      định route "!approve" theo status marker/PR đang mở, build GitHub API request) nên có unit
+      test. Agent verification: đọc lại SKILL.md/workflow YAML sau khi sửa, kiểm tra điểm chèn
+      đúng vị trí/thứ tự. E2E: thủ công trên Slack workspace + repo demo thật (không tự động hoá
+      được tương tác người-Slack-GitHub nhiều lượt thật).
+      PHẦN B: `bootstrap-project.yml` + chế độ tự động của project-initialization cũng là văn bản
+      điều phối thuần (YAML + SKILL.md) — không có unit test tự động, giống Phần A. Agent
+      verification: đọc lại project-initialization/SKILL.md sau khi sửa, xác nhận literal
+      PROJECT_BOOTSTRAP_AUTOMATED gate đúng các "ask" bị bỏ qua (Step 1, Step 4, Step 5) và không
+      đổi hành vi khi KHÔNG có signal này (phiên tương tác local không đổi). E2E: xem User
+      Verification Phần B ở verification_strategy — chạy /new-project thật trên account chính
+      (user đã chấp nhận rủi ro), vì tạo repo GitHub thật + chạy claude -p thật không mô phỏng
+      được bằng agent 1 lần.
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 80
+    value: |
+      1. User gõ "/new-feature Thêm dark mode" trong channel Slack của project -> Worker tạo
+         GitHub issue (title derive từ text), nhúng channel_id+thread_ts vào body, post message
+         mở thread "Bắt đầu feature: Thêm dark mode (issue #42)". userspec-turn chạy, câu hỏi đầu
+         tiên xuất hiện trong thread (và trong GitHub issue).
+      2. User trả lời trong thread như chat thường -> Worker relay thành gh issue comment ->
+         interview tiếp tục, câu hỏi kế xuất hiện lại cả 2 nơi.
+      3. Validate xong, spec PR mở -> message trong thread có link PR + "Review rồi gõ !approve
+         trong thread này để tiếp tục". User mở link, xem diff trên GitHub, quay lại Slack gõ
+         "!approve" -> Worker đọc status marker biết đang chờ spec-approve -> post comment
+         "/approve" lên đúng PR đó -> route job cũ xử lý y nguyên (merge spec PR, implement bắt
+         đầu).
+      4. Lúc implement gặp quyết định cần hỏi -> câu hỏi xuất hiện trong thread (và GitHub), user
+         trả lời ngay trong Slack như bước 2.
+      5. Implement xong, code PR mở -> message có link PR + hướng dẫn gõ !approve. User xem diff,
+         quay lại Slack gõ "!approve" -> Worker đọc status marker biết đang chờ code-approve ->
+         Worker tự gọi GitHub REST API merge trực tiếp (không qua comment, vì không có listener
+         nào cho case này) -> finalize chạy.
+      6. Finalize xong -> message "Feature xong" xuất hiện trong thread.
+      7. (Phần B) User tự tạo channel Slack mới "#du-an-x", gõ "/new-project du-an-x" trong đó ->
+         Worker bắn repository_dispatch tới repo điều phối -> job Actions chạy claude -p
+         project-initialization (chế độ tự động) tạo repo GitHub mới "du-an-x" (private), vendor
+         online-pipeline+Slack, set secrets (copy từ control-plane) -> post xác nhận vào channel
+         "#du-an-x" kèm link repo. User gõ ngay "/new-feature ..." trong channel đó như bước 1,
+         không cần làm gì thêm ở local.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 75
+    value: |
+      - Slash command trong channel project -> GitHub issue mới + thread mới, body issue chứa
+        đúng channel_id/thread_ts, không tạo thêm issue/thread thừa.
+      - Mọi câu hỏi/thông báo bot (userspec-turn, implement, awaiting_decision) xuất hiện ĐỒNG
+        THỜI ở gh issue comment VÀ Slack thread, nội dung khớp nhau.
+      - Tin nhắn thường trong thread được relay đúng thành gh issue comment, kích hoạt route job
+        hiện có (issue_comment) y như người dùng tự comment trên GitHub.
+      - "!approve" lúc spec-PR đang mở -> Worker post "/approve" lên đúng PR đó -> PR được merge
+        qua route job cũ, không gọi merge trực tiếp.
+      - "!approve" lúc code-PR đang mở -> Worker gọi merge REST API trực tiếp -> code PR merge
+        thật, finalize trigger đúng (pull_request:closed không phân biệt actor).
+      - "!approve" gõ SAI thời điểm (không có PR nào đang mở chờ approve) -> Worker báo lỗi rõ
+        trong thread, không làm gì trên GitHub.
+      - Finalize hoàn tất -> message xác nhận trong thread.
+      - Signature Slack (signing secret) được verify cho MỌI request tới Worker; request không
+        hợp lệ bị từ chối (401), không xử lý.
+      - Tắt/không bật Slack integration cho repo -> toàn bộ hành vi online-pipeline hiện có không
+        đổi (chỉ gh issue comment như cũ).
+      - "/new-project <tên>" -> repo mới tạo đúng tên, private, dưới account hiện tại, có main+dev,
+        hooks, đã vendor online-pipeline+Slack, secrets đã set đầy đủ (GH_PAT, Claude auth), Claude
+        GitHub App đã cover (nhờ cài mức All repositories từ trước) — sẵn sàng /new-feature ngay,
+        không cần bước tay nào ở local.
+      - "/new-project" với tên repo đã tồn tại -> báo lỗi rõ trong channel, không tạo đè/tạo trùng.
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 70
+    value: |
+      - Tin nhắn Slack đến cho 1 thread đã finalize xong (feature đã archive) -> Worker không tìm
+        thấy issue đang mở tương ứng (hoặc issue đã closed) -> báo lỗi rõ trong thread, không tạo
+        hành động gì trên GitHub.
+      - "!approve" gõ nhiều lần liên tiếp (double-submit) trong lúc route job đầu đã đang xử lý ->
+        chấp nhận rủi ro race nhỏ (giống last-write-wins đã chấp nhận ở hybrid-local-online-pipeline),
+        không xây lock.
+      - User gõ slash command 2 lần cho cùng 1 mô tả feature (tạo nhầm trùng) -> mỗi lần tạo 1
+        issue/thread riêng, không có de-dup — hạn chế v1 đã biết, người dùng tự đóng issue thừa.
+      - Worker nhận message KHÔNG phải trong 1 thread feature nào (tin nhắn rời trong channel,
+        không reply vào thread nào) -> bỏ qua, không relay, không báo lỗi (tránh spam GitHub với
+        comment rác).
+      - Repo tắt Slack integration SAU KHI đã có feature đang chạy qua Slack -> hạn chế v1: feature
+        đó tiếp tục cần Slack (không có đường chuyển ngược về GitHub-only giữa chừng); chấp nhận
+        hạn chế, ngoài phạm vi feature này (khác hẳn cơ chế switch online/local đã có).
+      - "/new-project" gõ 2 lần nhanh liên tiếp cho cùng 1 tên -> 2 lần dispatch, lần 2 "gh repo
+        create" lỗi "already exists" -> job thứ 2 thất bại, báo lỗi rõ trong channel; không có
+        de-dup phía Worker (hạn chế v1 nhất quán với edge case trùng tên ở /new-feature).
+      - "/new-project" gõ TRONG channel đã map với 1 project khác rồi (channel đã có thread/feature
+        cũ) -> cho phép (channel không bị khoá 1-project-duy-nhất về mặt kỹ thuật), nhưng đây là
+        dùng sai quy ước UX đã thống nhất (1 project = 1 channel) — hạn chế v1, không validate/chặn
+        phía hệ thống, người dùng tự giữ đúng quy ước.
+      - "/link-repo <owner>/<name>" trỏ tới repo không tồn tại, hoặc Worker không có quyền truy
+        cập (GH_PAT không thấy repo đó) -> báo lỗi rõ trong channel, không ghi mapping.
+      - "/link-repo" gõ 2 lần cho cùng 1 channel với 2 repo KHÁC NHAU -> ghi đè mapping cũ bằng
+        mapping mới (last-write-wins, nhất quán với phong cách chấp nhận race đơn giản đã dùng ở
+        các nơi khác) — không cảnh báo "đang ghi đè", hạn chế v1.
+      - Gõ "/new-feature"/"!approve" trong 1 channel CHƯA từng `/link-repo` hay `/new-project` (chưa
+        có mapping channel<->repo nào) -> Worker báo lỗi rõ "channel chưa được liên kết với repo
+        nào, gõ /link-repo hoặc /new-project trước", không làm gì trên GitHub.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 70
+    value: |
+      - Worker nhận request Slack có signature không hợp lệ -> trả 401, không xử lý, không log
+        nội dung nhạy cảm.
+      - Worker gọi GitHub API lỗi (rate limit, token hết hạn, network) khi relay message/approve ->
+        Worker post lại 1 message lỗi rõ ràng vào đúng thread Slack, không tự retry.
+      - GitHub Actions job gọi Slack API lỗi (token sai, rate limit, Slack down) khi đang post câu
+        hỏi -> coi là best-effort: KHÔNG fail/chặn stage, log lỗi, gh issue comment vẫn diễn ra
+        bình thường (GitHub là nguồn sự thật).
+      - Worker tạo GitHub issue thành công nhưng post Slack message mở thread lỗi (network ngay
+        sau đó) -> issue đã tồn tại thật nhưng không có thread nào map tới nó -> hạn chế v1: báo
+        lỗi cho user biết tạo thread thất bại, issue vẫn có thể xử lý tiếp qua GitHub trực tiếp
+        (không tự động retry tạo thread).
+      - Cloudflare Workers KV ghi lỗi lúc Worker vừa tạo issue (hạn mức/network) -> reverse mapping
+        (thread_ts -> issue) không có -> approve/relay sau đó từ Slack cho issue này sẽ lỗi "không
+        tìm thấy mapping"; chấp nhận hạn chế v1 (rủi ro hãn hữu), người dùng tương tác qua GitHub
+        trực tiếp nếu gặp.
+      - PHẦN B: job bootstrap (gh repo create, hoặc claude -p project-initialization, hoặc
+        vendor/set-secret) lỗi GIỮA CHỪNG -> repo mới có thể đã tồn tại nhưng chưa hoàn tất setup
+        (nửa vời) -> báo lỗi rõ trong channel kèm bước nào đã xong/chưa xong; KHÔNG tự rollback
+        (xoá repo đã tạo) — hạn chế v1 chấp nhận, nhất quán với phong cách "báo lỗi rõ, không retry
+        phức tạp" đã dùng ở Phần A và ở hybrid-local-online-pipeline.
+      - repository_dispatch gửi từ Worker tới repo điều phối thất bại (token hết hạn, network) ->
+        Worker báo lỗi rõ trong channel gốc, không tạo repo gì cả, user tự gõ lại /new-project.
+      - (Sửa sau completeness-check lần 3) Worker xử lý background (sau khi đã ACK Slack trong
+        <3s) xong nhưng gọi `response_url` để gửi kết quả thật bị lỗi (response_url hết hạn — Slack
+        giới hạn ~30 phút/5 lần gọi, hoặc network) -> fallback gọi `chat.postMessage` thường (dùng
+        channel_id đã biết) để vẫn báo được kết quả, không im lặng bỏ qua.
+      - (Sửa sau completeness-check lần 4) Slack Events API gửi lại (retry) 1 tin nhắn nếu Worker
+        không trả 200 kịp trong ~3s -> Worker ACK ngay (200 trống) TRƯỚC khi xử lý GitHub API, nên
+        tránh được hầu hết retry; nếu retry vẫn xảy ra (vd Worker crash giữa xử lý sau khi đã ACK)
+        -> chấp nhận rủi ro xử lý trùng 1 tin nhắn 2 lần (post lặp 1 gh issue comment) là hạn chế
+        v1 hãn hữu, không xây de-dup theo Slack event_id (Slack có cung cấp event_id riêng cho mỗi
+        event, có thể dùng để de-dup trong tương lai nếu cần, nhưng không bắt buộc cho v1).
+      - (Sửa sau completeness-check lần 4) User tạo channel project dạng PRIVATE (sai yêu cầu) ->
+        `conversations.join` thất bại ngay lần tương tác đầu -> Worker báo lỗi rõ, hướng dẫn đổi
+        channel thành public hoặc tạo channel public mới, không tự động relay được cho tới khi sửa.
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 60
+    value: |
+      Agent verification (đọc code tĩnh): đúng điểm chèn Slack post trong SKILL.md/workflow YAML,
+      đúng literal "!approve" (không phải "/approve"), đúng thứ tự route theo status marker, Worker
+      script có verify signing secret, không có thay đổi vào `on:` event của 3 YAML hiện có.
+      User verification (thủ công, bắt buộc vì tương tác người-Slack-GitHub nhiều lượt thật không
+      mô phỏng được): chạy đầy đủ 1 vòng đời feature qua Slack trên workspace/repo demo thật —
+      start bằng slash command, trả lời interview, approve spec, trả lời awaiting_decision,
+      approve code, nhận thông báo finalize — xác nhận mirror đúng cả 2 chiều ở mỗi bước, và thử
+      các edge case/error scenario đã liệt kê (signature sai, approve sai thời điểm, Slack
+      down,...).
+      PHẦN B (đã xác nhận với user): test /new-project chạy NGAY trên account GitHub chính của
+      user (không dùng account/workspace demo riêng) — user tự chấp nhận rủi ro tạo repo thật nếu
+      có lỗi lúc test lần đầu. Kịch bản: gõ /new-project trong 1 channel mới tạo tay -> xác nhận
+      repo GitHub mới xuất hiện đúng tên/private/account, có main+dev+hooks, đã vendor
+      online-pipeline+Slack, secrets đã set đủ (GH_PAT, Claude auth), Claude GitHub App đã cover
+      (nhờ All-repositories), message xác nhận xuất hiện ĐÚNG channel (top-level, không phải
+      thread) -> gõ /new-feature ngay trong channel đó, xác nhận chạy được luôn không cần bước tay
+      nào ở local.
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 50
+    value: |
+      1 project (repo) = 1 Slack channel cố định; 1 feature = 1 thread trong channel đó. Bot hỏi
+      và trả lời trong thread, không ở top-level channel (trừ message mở thread lúc tạo feature
+      mới và slash command invocation, theo bản chất Slack). Dùng tin nhắn chữ "!approve" thay vì
+      nút bấm Block Kit.
+    gaps: []
+    required: false
+
+  risks:
+    score: 70
+    value: |
+      - Literal "!approve" trong 1 tin nhắn thường (không phải lệnh Slack thật) có thể bị gõ nhầm
+        trong hội thoại thường, kích hoạt approve ngoài ý muốn. Chấp nhận (nhất quán với
+        /switch-online đã chấp nhận ở hybrid-local-online-pipeline), rủi ro thấp vì chỉ xảy ra
+        trong thread riêng của 1 feature.
+      - Worker là thành phần public-facing DUY NHẤT (nhận webhook Slack) nhưng dùng CHUNG GH_PAT
+        với online-pipeline (quyết định đã chốt) -> nếu secret Worker bị lộ, blast radius bằng với
+        toàn bộ quyền của GH_PAT hiện có (full repo write), không bị giảm nhẹ. Chấp nhận theo
+        quyết định của user, ghi nhận là rủi ro đã biết.
+      - Cloudflare Workers KV dùng làm nguồn sự thật DUY NHẤT cho chiều mapping Slack-event->issue;
+        nếu KV mất dữ liệu (hiếm, nhưng có thể xảy ra khi tạo namespace sai môi trường/account) thì
+        toàn bộ feature đang chạy qua Slack mất khả năng relay — phải tương tác lại qua GitHub
+        trực tiếp. Chấp nhận hạn chế v1.
+      - Đây là lần đầu repo có Cloudflare Worker/serverless — thêm 1 hệ thống vận hành mới (deploy,
+        secrets, theo dõi lỗi) ngoài phạm vi GitHub Actions quen thuộc.
+      - Claude GitHub App cài mức "All repositories" + 1 PAT/credential dùng chung cho MỌI repo
+        (hiện tại và tương lai, kể cả repo tự tạo qua /new-project) -> blast radius lớn nhất trong
+        toàn bộ feature: 1 secret bị lộ ảnh hưởng toàn bộ danh mục project của user, không giới
+        hạn theo repo. Chấp nhận theo quyết định tường minh của user (đổi lấy "0 bước tay" cho mỗi
+        project mới), ghi nhận là rủi ro đã biết, không xây cơ chế phân quyền hẹp hơn cho v1.
+      - project-initialization/SKILL.md vốn thiết kế cho phiên tương tác local (các bước "ask" là
+        rào an toàn cho trường hợp mơ hồ: thư mục không trống, origin đã tồn tại, dev đã có).
+        Thêm chế độ tự động nghĩa là CHẤP NHẬN các rào này không áp dụng trong bối cảnh bootstrap
+        (luôn thư mục trống, luôn chưa có origin) — nếu giả định đó sai (vd bootstrap chạy nhầm
+        trên 1 thư mục không trống do lỗi job) thì mất đi lưới an toàn vốn có ở phiên tương tác.
+        Mitigation: job bootstrap LUÔN chạy trên checkout trống hoàn toàn mới (gh repo create rồi
+        clone về, không bao giờ tái sử dụng working dir cũ) — tự thoả điều kiện tiên quyết của mọi
+        "ask" bị bỏ qua, không chỉ bỏ qua check mà không đảm bảo điều kiện.
+      - Repo điều phối (control-plane) MỚI là 1 điểm tập trung quyền lực kỹ thuật (giữ credential
+        tạo repo cho toàn bộ account) — nếu repo điều phối bị compromise (vd 1 collaborator được
+        thêm nhầm), rủi ro tương đương compromise toàn bộ account GitHub của user. Chấp nhận v1,
+        giảm thiểu bằng cách giữ repo điều phối private, không thêm collaborator nào ngoài owner.
+      - KHÔNG giới hạn ai trong Slack workspace được gõ "!approve" (merge code thật trực tiếp,
+        bỏ qua review người thật) hay "/new-project" (tạo repo mới + tiêu tốn credential quyền
+        rộng toàn account) — user đã XÁC NHẬN LẠI quyết định này sau khi được nhắc rõ 2 năng lực
+        mạnh này tồn tại (không chỉ là lúc ban đầu khi phạm vi còn nhẹ). Rủi ro chỉ thực tế hoá
+        nếu sau này có thêm người khác vào workspace; chấp nhận v1, không xây cơ chế phân quyền
+        theo Slack user ID.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 70
+    value: |
+      - Mapping thread<->feature: nhúng channel_id+thread_ts vào BODY issue lúc tạo (Actions đọc
+        trực tiếp, không round-trip); chiều ngược (Slack event -> issue) lưu Cloudflare KV do
+        Worker tự ghi lúc tạo issue. Từ chối phương án file commit riêng (sidecar) vì tạo thêm
+        round-trip không cần thiết cho phía Worker.
+      - Approve dùng literal "!approve" (không "/approve") để tránh trùng cú pháp slash-command
+        thật của Slack — dùng CHUNG 1 từ khoá cho cả spec-approve và code-approve, Worker tự biết
+        route dựa trên status marker/PR đang mở của feature đó (không cần 2 từ khoá riêng).
+      - Approve spec PR qua Slack: Worker GIẢ LẬP lại đúng hành vi người dùng (post comment
+        "/approve" lên PR) để tái dùng 100% route job cũ, không gọi merge trực tiếp.
+      - Approve code PR qua Slack: Worker gọi merge REST API TRỰC TIẾP (năng lực mới, vì không có
+        listener comment nào cho code PR hiện nay) — xác nhận không cần workflow/trigger mới vì
+        pull_request:closed không phân biệt actor.
+      - Post song song GitHub + Slack luôn luôn (không có cờ chọn 1 trong 2), để giữ GitHub làm
+        nguồn sự thật không đổi.
+      - Worker dùng chung GH_PAT với online-pipeline (không tạo token/App riêng) — quyết định của
+        user, đổi lại đơn giản hơn, đánh đổi lấy blast-radius cao hơn nếu secret Worker lộ (xem
+        Risks).
+      - (Phần B) Bootstrap project mới KHÔNG tự chế logic tạo repo bằng Worker — Worker chỉ bắn
+        repository_dispatch tới 1 workflow Actions THẬT có gh CLI sẵn trong 1 repo điều phối riêng.
+        Lý do: Cloudflare Worker không có git/gh CLI; dùng gh CLI qua Actions tái dùng đúng công cụ
+        đã chứng minh hoạt động trong online-pipeline, tránh phải tự hiện thực mã hoá secret
+        (sealed-box) trong Worker.
+      - (Sửa sau completeness-check lần 2) Worker LÀ 1 instance duy nhất phục vụ MỌI repo (không
+        vendor/deploy lại mỗi repo) — source code Worker đặt NGAY trong repo điều phối (không phải
+        skills/online-pipeline/assets/, không phải repo thứ 3), vì cả 2 đều là hạ tầng
+        singleton/account-wide, gộp chung cho gọn. Thêm mapping channel_id<->repo trong Cloudflare
+        KV (Worker tự ghi lúc /new-project; lệnh mới "/link-repo <owner>/<name>" để ghi tay cho
+        repo đã tồn tại từ trước) để Worker route đúng repo cho mọi lệnh ngoài /new-project.
+      - (Sửa sau completeness-check lần 3) Worker tự `conversations.join` channel ngay khi nhận
+        slash-command đầu tiên trong đó (/new-project hoặc /link-repo), dùng scope mới
+        channels:join + channels:history, để sau đó nhận được message.channels event cho mọi tin
+        nhắn thường trong channel — không cần user tự tay invite bot. Mọi slash-command handler
+        (/new-feature, /new-project, /link-repo) ACK NGAY (trả response tối giản trong <3s theo
+        giới hạn Slack) rồi xử lý thật ở background (Cloudflare `ctx.waitUntil`), gửi kết quả thật
+        qua `response_url` của chính request đó — không chờ GitHub API/KV xong rồi mới trả lời
+        Slack trong cùng 1 request.
+      - (Sửa sau completeness-check lần 4) Cùng quy tắc ACK-ngay-rồi-xử-lý-background áp dụng cho
+        CẢ Events API (tin nhắn thường relay, "!approve") — không chỉ slash-command. Khác biệt:
+        Events API không có response_url, nên Worker trả 200 trống ngay, xử lý GitHub API ở
+        background, rồi gửi kết quả qua `chat.postMessage` thường (không phải response_url). Vì
+        Slack Events API có thể gửi lại (retry) nếu không nhận 200 kịp — ACK ngay cũng tránh được
+        rủi ro xử lý trùng 1 tin nhắn 2 lần do retry.
+      - (Sửa sau completeness-check lần 4) `conversations.join` CHỈ hoạt động với channel PUBLIC
+        (Slack không cho bot tự join channel private). Ràng buộc: channel Slack cho mỗi project
+        PHẢI là public channel — ghi rõ trong hướng dẫn tạo channel (manual_user_actions bước 7).
+        Nếu user lỡ tạo private: Worker tự join thất bại, báo lỗi rõ trong lần tương tác đầu tiên
+        ("channel này là private, bot không tự vào được — đổi channel này thành public, hoặc tạo
+        channel public mới"), không âm thầm bỏ qua.
+      - Chế độ tự động của project-initialization chỉ bỏ "ask" ở các điểm LUÔN đúng trong bối cảnh
+        bootstrap (thư mục trống, origin chưa có, dev chưa có, push main) — không bỏ qua điều kiện
+        tiên quyết, chỉ bỏ qua việc HỎI khi điều kiện đó đã được đảm bảo chắc chắn bởi quy trình
+        bootstrap (checkout luôn mới).
+      - Mọi repo mới dùng CHUNG GH_PAT + Claude auth credential + Claude GitHub App (All
+        repositories) với control-plane và các repo khác — không tạo credential riêng/hẹp hơn cho
+        từng repo mới, đổi lấy "0 bước tay" (quyết định tường minh của user, xem Risks).
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 60
+    value: |
+      SỬA SAU completeness-check lần 2: Worker KHÔNG vendor vào từng repo project nữa (Worker
+      đa-repo, deploy 1 lần/account — vendor theo cơ chế online-pipeline hiện có chỉ hợp lý khi
+      mỗi repo có bản riêng, không còn đúng ở đây). Worker source đặt trong CHÍNH repo điều phối
+      (control-plane) — cả 2 đều là hạ tầng account-wide, singleton, gộp vào 1 repo cho gọn, không
+      cần tạo thêm repo thứ 3. Deploy bằng `wrangler deploy` — bước thủ công của user, 1 LẦN DUY
+      NHẤT cho cả account. Secrets Worker (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET, GH_PAT quyền
+      rộng dùng chung, Cloudflare KV namespace binding cho mapping channel<->repo và
+      thread_ts<->issue) set qua `wrangler secret put`.
+      Repo điều phối (= nơi chứa cả Worker source lẫn workflow bootstrap) có thêm 1 workflow
+      Actions (`bootstrap-project.yml`) nhận `repository_dispatch` từ chính Worker đó; secrets của
+      repo điều phối (GH_PAT quyền tạo repo trên account, Claude auth credential dùng chung) set
+      qua `gh secret set` như mọi repo online-pipeline khác.
+    gaps: []
+    required: false
+
+  manual_user_actions:
+    score: 75
+    value: |
+      MỘT LẦN DUY NHẤT CHO CẢ ACCOUNT/WORKSPACE (sửa sau completeness-check lần 2 — KHÔNG lặp lại
+      mỗi repo, khác bản trước):
+      1. Tạo Slack App tại api.slack.com/apps (user tự làm, cần quyền admin workspace), cấp scope
+         `chat:write` (post tin nhắn) + `channels:history` (nhận tin nhắn thường qua Events API,
+         sửa sau completeness-check lần 3) + `channels:join` (Worker tự `conversations.join` ngay
+         khi nhận lệnh slash-command đầu tiên trong 1 channel — /new-project hoặc /link-repo —
+         không cần user tự tay invite bot vào mỗi channel). Không cần `channels:manage` (channel
+         luôn tạo tay).
+      2. Lấy Bot Token + Signing Secret, set vào Cloudflare Worker secrets (`wrangler secret put`).
+      3. Deploy Worker (`wrangler deploy`) — MỘT LẦN, phục vụ MỌI repo sau này (không redeploy mỗi
+         repo) — lấy URL Worker, set làm Request URL cho Slack Slash Command + Event Subscriptions
+         trong Slack App config.
+      4. Tạo repo điều phối (control-plane) mới trên GitHub, thêm workflow
+         `bootstrap-project.yml`, set các secret quyền rộng cho RIÊNG job Actions này (GH_PAT
+         tạo-repo-được, Claude auth, Slack bot token) qua `gh secret set` — secrets này CHỈ job
+         Actions đọc được, KHÔNG phải nơi Worker lấy credential (Worker có bản riêng của mình, set
+         ở bước 2 qua `wrangler secret put` — 2 kho secret tách biệt, dùng CÙNG giá trị nhưng 2 cơ
+         chế lưu khác nhau vì Worker và GitHub Actions job là 2 runtime khác nhau).
+      5. Cài Claude GitHub App ở mức "All repositories" trên account (1 lần).
+
+      MỖI REPO ĐÃ TỒN TẠI TỪ TRƯỚC (không qua /new-project):
+      6. Chạy `setup-online-pipeline.sh` cục bộ (mở rộng thêm — sửa sau completeness-check lần 4):
+         vendor + set secret GH_PAT/Claude-auth NHƯ CŨ, VÀ THÊM `SLACK_BOT_TOKEN` (giá trị copy từ
+         Slack App đã tạo ở bước 1) làm secret repo — vì mỗi GitHub Actions job (userspec-turn,
+         implement) tự gọi Slack chat.postMessage trực tiếp (không qua Worker) để post song song,
+         cần có bot token riêng trong chính secret của repo đó, khác hẳn Worker's wrangler secret
+         (2 runtime khác nhau, xem mục Worker secrets ở trên).
+      7. Tự tạo channel Slack cho project đó (tay) — PHẢI là public channel (sửa sau
+         completeness-check lần 4: `conversations.join` chỉ hoạt động với channel public, không
+         tự join được private channel).
+      8. Gõ "/link-repo <owner>/<name>" trong channel đó 1 LẦN — Worker ghi mapping
+         channel_id<->repo vào KV, từ đó /new-feature và !approve trong channel này hoạt động
+         đúng.
+
+      MỖI REPO MỚI qua /new-project: vẫn cần bước 7 (tự tạo channel Slack tay — KHÔNG đổi, luôn
+      cần cho mọi project theo đúng quy ước 1 project = 1 channel). CHỈ bỏ bước 6 (chạy script cục
+      bộ) và bước 8 (/link-repo) — bootstrap tự làm hết phần đó (vendor, secret, mapping
+      channel<->repo do Worker tự ghi lúc nhận lệnh /new-project), sẵn sàng /new-feature ngay sau
+      khi channel đã tạo.
+    gaps: []
+    required: false
+
+integration:
+  integration_points:
+    score: 80
+    value: |
+      PHẦN A: mở rộng skills/online-pipeline/SKILL.md (không tạo skill riêng, theo tiền lệ
+      hybrid-local-online-pipeline). Cầu nối là 1 Cloudflare Worker mới nhận Slack slash
+      command/events/interactivity, gọi GitHub API (tạo issue, post comment /approve, gh pr
+      merge) để tái dùng nguyên vẹn route job hiện có của 3 workflow YAML. Chiều ngược lại (bot ->
+      Slack): stage prompt trong online-pipeline/SKILL.md gọi thêm Slack chat.postMessage (dùng
+      thread_ts) mỗi khi hiện tại nó gọi gh issue comment.
+
+      PHẦN B: sửa skills/project-initialization/SKILL.md thêm 1 chế độ tự động, gated bằng literal
+      signal CỐ ĐỊNH `PROJECT_BOOTSTRAP_AUTOMATED` (đặt tên theo đúng tiền lệ
+      ONLINE_PIPELINE_AUTOMATED, không phải placeholder minh hoạ) — bỏ qua các "ask" ở Step 1 (luôn
+      thư mục trống), Step 4 (tên repo đã có sẵn từ Slack command, dev branch chưa tồn tại nên
+      không cần hỏi, push main không hỏi vì slash command đã là xác nhận), Step 5 report thành post
+      Slack thay vì chat. 1 repo điều phối MỚI (chưa tồn tại, cần tạo) chứa 1 workflow Actions mới
+      nhận repository_dispatch, chạy claude -p project-initialization (chế độ tự động) + sau đó tự
+      vendor/set-secret online-pipeline+Slack cho repo vừa tạo (logic tương đương
+      setup-online-pipeline.sh nhưng không hỏi gì, lấy giá trị secret từ chính control-plane repo).
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 70
+    value: |
+      PHẦN A: Slack API (chat.postMessage, Events API/slash command), Cloudflare Workers + KV
+      (free tier, đã có account), GitHub API/gh CLI (đã dùng trong online-pipeline).
+      PHẦN B: GitHub REST API repo-creation (`gh repo create` trong job Actions của repo điều
+      phối), `claude -p` chạy skill project-initialization, repository_dispatch (GitHub Actions
+      event type có sẵn, không cần thêm gì ngoài 1 workflow mới trong repo điều phối).
+    gaps: []
+    required: false
+
+  technical_constraints:
+    score: 70
+    value: |
+      Slack slash command/Events API yêu cầu xác thực request bằng Slack signing secret (bảo mật
+      — không được bỏ qua). Secrets (Slack bot token, signing secret, GitHub token cho Worker)
+      lưu trong Cloudflare Workers secret store, không commit vào repo. Slack free plan giữ lịch
+      sử message 90 ngày — không ảnh hưởng vì GitHub vẫn là nguồn sự thật. PHẦN B: Claude GitHub
+      App phải cài ở mức "All repositories" trên account 1 lần (bước thủ công duy nhất, không lặp
+      lại mỗi project); GH_PAT + Claude auth credential (OAuth token/API key) dùng CHUNG, copy từ
+      control-plane vào secrets của mỗi repo mới — một bí mật quyền rộng dùng ở nhiều nơi (xem
+      Risks).
+    gaps: []
+    required: false
+
+  data_requirements:
+    score: 70
+    value: |
+      PHẦN A: mapping bền thread_ts(Slack)<->slug/issue_number(GitHub) nhúng trong BODY issue
+      (đọc bởi Actions); chiều Slack-event->issue lưu Cloudflare Workers KV (Worker tự ghi lúc
+      tạo issue, không round-trip).
+      PHẦN B: payload repository_dispatch mang theo CHỈ channel_id (KHÔNG có thread_ts —
+      /new-project gõ ở top-level channel mới tạo, chưa có thread/feature nào tồn tại) để job
+      bootstrap post kết quả ngược lại đúng channel đó (top-level message, không phải reply vào
+      thread).
+      MAPPING MỚI (sửa sau completeness-check lần 2, áp dụng chung A+B): Worker đa-repo (deploy 1
+      lần/account, phục vụ MỌI repo — không phải 1 Worker/repo) cần biết 1 channel_id Slack map
+      tới repo GitHub nào, để xử lý đúng mọi lệnh ngoài /new-project (vd /new-feature gõ sau đó
+      trong cùng channel). Lưu channel_id<->repo(owner/name) trong CHÍNH Cloudflare KV đã dùng cho
+      mapping thread_ts<->issue. Ghi mapping này: (a) Worker tự ghi lúc nhận /new-project (đã biết
+      sẵn channel_id + tên repo sắp tạo, không cần round-trip); (b) với repo ĐÃ TỒN TẠI (onboard
+      qua setup script cục bộ như cũ, không qua bootstrap), thêm 1 lệnh Slack mới "/link-repo
+      <owner>/<name>" gõ 1 lần trong channel đó sau khi chạy setup script, để Worker ghi mapping
+      này — không cần endpoint/HTTP mới, tái dùng đúng pathway Slack-command sẵn có.
+    gaps: []
+    required: false
+
+  migration_needs:
+    score: 0
+    value: ""
+    gaps: ["Describe migration and compatibility needs when applicable"]
+    required: false
+
+notes: ""
