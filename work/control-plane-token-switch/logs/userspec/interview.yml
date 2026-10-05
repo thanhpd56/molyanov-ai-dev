@@ -1,0 +1,444 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-05 21:45:43"
+  last_updated: "2026-10-05 23:25:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
+conversation_history:
+  - asked_at: "2026-10-05 21:45:43"
+    topic_keys: ["user_problem", "data_requirements", "integration_points", "manual_user_actions"]
+    agent_questions: |
+      1. Vấn đề thật đang gặp là gì? Mục đích chính có phải là tránh rate-limit Claude usage
+         (5h/7d quota) khi nhiều repo/feature cùng chạy online-pipeline dùng chung 1
+         CLAUDE_CODE_OAUTH_TOKEN, giống vấn đề cswap giải quyết ở máy local? Hay còn lý do khác?
+      2. Pool token lưu ở đâu? Worker secret riêng từng slot (an toàn hơn, cần redeploy mỗi lần
+         thêm) hay Cloudflare KV (thêm/sửa qua lệnh, không cần redeploy, nhưng kém "secret" hơn)?
+      3. Ai được quyền chạy lệnh switch? Bất kỳ ai trong channel đã link (giống /new-feature),
+         hay giới hạn hơn?
+      4. Chỉ switch tay, hay cũng cần tự động switch khi gặp rate-limit (giống cswap auto)?
+    user_answer: |
+      1. giống vấn đề cswap giải quyết
+      2. Cloudflare KV đi
+      3. ai tỏng channel đều được
+      4. cả tay và auto.
+
+  - asked_at: "2026-10-05 22:00:00"
+    topic_keys: ["error_scenarios", "data_requirements", "integration_points"]
+    agent_questions: |
+      5. Auto-switch kích hoạt khi nào, chính xác? Không có process nền polling quota như cswap
+         auto — cách khả thi nhất là: khi claude -p trong online-pipeline fail vì rate-limit,
+         thay vì retry cùng token, workflow gọi Worker đổi sang token khác trong pool rồi retry.
+         Bạn có log/ví dụ thật của lỗi rate-limit từ claude -p không (dấu hiệu nhận diện chính
+         xác — exit code, text lỗi)?
+      6. Pool dùng chung cho tất cả repo, hay riêng từng repo? (Pool có N token, mỗi repo đang
+         "trỏ" vào 1 token cụ thể, độc lập với repo khác?)
+      7. Token được thêm vào pool bằng cách nào? Cần thêm 1 slash command (/add-token <alias>
+         <token>), hay operator tự thêm tay qua wrangler/gh api?
+      8. Switch tay chọn theo alias cụ thể, hay cũng cần kiểu xoay vòng không chỉ định?
+    user_answer: |
+      5. Removing web/vite.config.ts
+         Implement attempt 2/3 (stage: implement)
+         You've hit your session limit · resets 3:40pm (UTC)
+         Technical failure on attempt 2 (status: ready_for_review).
+         Everything up-to-date
+         HEAD is now at 42ac54b Merge pull request #3 from thanhpd56/userspec/bootstrap-project-c-ng-nh-p-ng-xu-t-2
+         Implement attempt 3/3 (stage: implement)
+         You've hit your session limit · resets 3:40pm (UTC)
+         Technical failure on attempt 3 (status: ready_for_review).
+      6. tất cả repo.
+      7. slash.
+      8. chọn alias.
+
+  - asked_at: "2026-10-05 22:15:00"
+    topic_keys: ["error_scenarios", "data_requirements"]
+    agent_questions: |
+      9. Mẫu lỗi để nhận diện rate-limit — ngoài "You've hit your session limit" (5h), còn dạng
+         "weekly limit" (7-day) khác chữ không? Bạn có gặp dạng weekly chưa?
+      10. Né token đã biết bị rate-limit (lưu "token X bị limit đến giờ Y" trong KV, bỏ qua đến
+          khi hết giờ) hay xoay vòng mù (thử token tiếp theo, không nhớ gì)?
+      11. Áp dụng auto-switch cho cả 3 workflow (userspec-turn, implement, knowledge-init) hay chỉ
+          chỗ đang gặp (implement)?
+    user_answer: |
+      9. You've hit your weekly limit · resets 7am (Asia/Saigon)
+      10. xoay vòng thông minh
+      11. cả 3
+
+  - asked_at: "2026-10-05 22:25:00"
+    topic_keys: ["edge_cases", "integration_points", "ui_ux_requirements"]
+    agent_questions: |
+      12. Khi mọi token trong pool đều đang bị rate-limit: vẫn chọn token gần reset nhất rồi thử
+          (best-effort), hay báo lỗi rõ ràng, không thử nữa?
+      13. Repo mới bootstrap qua /new-project có lấy token từ pool luôn không, hay giữ nguyên
+          bootstrap hiện tại (copy token cố định từ control-plane), pool chỉ dùng để switch sau?
+      14. Cần lệnh xem trạng thái không? (/switch-token không kèm alias → trả lời đang dùng alias
+          nào + danh sách pool, giống cswap list/status)
+    user_answer: |
+      12 b (báo lỗi rõ ràng, không thử nữa)
+      13 có sửa cả bootstrap
+      14. có cần
+
+  - asked_at: "2026-10-05 22:35:00"
+    topic_keys: ["constraints", "ui_ux_requirements"]
+    agent_questions: |
+      15. /add-token có cần giới hạn quyền chặt hơn /switch-token không (vì thêm cả 1 subscription
+          mới vào pool chung, rủi ro cao hơn switch)?
+      16. Cần lệnh xoá/gỡ token khỏi pool không (ví dụ subscription hết hạn/bị revoke)?
+    user_answer: |
+      15. ko cần giới hạn
+      16: có cần lệnh xoá.
+
+  - asked_at: "2026-10-05 22:50:00"
+    topic_keys: ["integration_points", "constraints"]
+    agent_questions: |
+      17. Code research phát hiện online-pipeline-userspec.yml's "Run userspec-turn" step has NO
+          retry loop at all today (single claude -p call under set -euo pipefail, unlike implement/
+          knowledge-init's 3-attempt loops). Should this feature add a full 3-attempt retry loop to
+          userspec-turn (matching the other two, also incidentally fixing today's "any crash fails
+          the whole run with zero retry" behavior there), or only a minimal single
+          detect-rate-limit-then-retry-once, leaving all other crash behavior unchanged?
+    user_answer: |
+      Ok phương án 1. (full 3-attempt retry loop, matching implement/knowledge-init)
+
+  - asked_at: "2026-10-05 23:05:00"
+    topic_keys: ["ui_ux_requirements", "edge_cases", "error_scenarios"]
+    agent_questions: |
+      18. /add-token work2 sk-ant-oat01-xxxx — tách alias (từ đầu) và token (phần còn lại) theo
+          khoảng trắng đầu tiên, được không? alias chỉ cho chữ/số/-/_ (không khoảng trắng/ký tự
+          lạ) — ok không?
+      19. Auto-switch retry có tính vào 3 lần ATTEMPTS hiện có (tổng tối đa 3), hay thêm ngoài
+          (có thể >3 lần, mỗi đổi token là 1 lượt mới)?
+      20. /switch-token <alias> tay, nếu alias đang cooldown — vẫn cho đổi theo ý người dùng, hay
+          chặn + báo cooldown đến giờ nào?
+      21. /remove-token xoá alias 1 repo đang dùng, rồi /switch-token (status) cho repo đó — hiện
+          tên alias cũ bình thường, hay ghi chú "(đã bị xoá)"?
+    user_answer: |
+      18 ok
+      19 có tính
+      20 vẫn cho đổi
+      21 cần ghi chú đã xoá.
+
+  - asked_at: "2026-10-05 23:20:00"
+    topic_keys: ["error_scenarios", "edge_cases"]
+    agent_questions: |
+      22. implement.yml rate-limit giữa lúc code đang implement — lượt retry sau khi đổi token xử
+          lý phần việc đã làm dở thế nào? Đề xuất: giống hệt mọi lỗi kỹ thuật khác hiện tại — reset
+          về $LAST_GOOD rồi thử lại từ đầu với token mới, không có cơ chế "resume giữa chừng" mới.
+      23. /add-token với alias đã tồn tại — đề xuất: báo lỗi, không ghi đè (phải /remove-token
+          trước nếu muốn đổi), tránh 1 người vô tình đổi token đang được nhiều repo khác dùng mà
+          không ai biết.
+    user_answer: |
+      Tiếp tục đi. (đồng ý cả 2 đề xuất: 22 reset về $LAST_GOOD như lỗi kỹ thuật thường; 23 báo lỗi,
+      không ghi đè alias đã tồn tại)
+
+general_understanding:
+  feature_name:
+    score: 90
+    value: "Slack slash commands for a shared Claude OAuth token pool with manual + automatic switching on rate-limit, for control-plane"
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 90
+    value: |
+      control-plane's Worker gains a shared pool of pre-registered Claude OAuth tokens (each under
+      an alias) stored in Cloudflare KV, inspired by claude-swap's add-token/switch mechanism but
+      applied to a GitHub repo's CLAUDE_CODE_OAUTH_TOKEN Actions secret instead of a local
+      credentials file. New Slack slash commands manage the pool and let any linked channel switch
+      its repo's active token. online-pipeline's three claude -p retry loops (userspec-turn,
+      implement, knowledge-init) detect a Claude rate-limit error, call the Worker to rotate to an
+      untried, not-known-exhausted token for that repo, and retry within the same run.
+      bootstrap-project.yml also draws a repo's initial token from the pool instead of a single
+      fixed control-plane secret.
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 90
+    value: |
+      Multiple repos share online-pipeline CI load, and all currently point at the same single
+      CLAUDE_CODE_OAUTH_TOKEN secret per repo (copied from one fixed control-plane-held token at
+      bootstrap). A busy period across repos exhausts that one Claude account's 5-hour session
+      window or 7-day weekly window, confirmed in production (real log: "You've hit your session
+      limit · resets 3:40pm (UTC)" causing 2 implement retries to fail outright). This is the same
+      problem claude-swap solves for a local machine with multiple logged-in accounts, applied here
+      to repos' CI secrets instead of a local credentials file.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 80
+    value: "Internal team members operating onboarded repos through Slack (same trust tier as /new-feature's existing linked-channel users)."
+    gaps: []
+    required: false
+
+  success_criteria:
+    score: 85
+    value: |
+      - Any user in a channel linked to a repo can switch that repo's active token to a specific
+        pool alias, add a new token to the shared pool, remove one, or see current status.
+      - When a claude -p call in any of the three online-pipeline retry loops hits a Claude
+        rate-limit error, the run automatically rotates to a pool token not currently known to be
+        exhausted and retries within the same job run, without manual intervention.
+      - A newly bootstrapped repo (/new-project) is assigned a pool token at creation instead of
+        always the same fixed one.
+    gaps: []
+    required: true
+
+  constraints:
+    score: 85
+    value: |
+      - Pool storage: Cloudflare KV (not per-slot Worker secrets) — add/remove without redeploy.
+      - Access control: no new trust tier: every command (switch/add/remove/status) usable by
+        anyone in a channel already linked to a repo, matching /new-feature's existing model.
+      - Setting a GitHub Actions secret via the REST API requires libsodium sealed-box encryption
+        with the repo's public key — a new Worker dependency.
+      - Reuse the existing SLACK_RELAY_TOKEN shared-secret auth for the new CI-facing endpoint
+        (consistent with /relay) rather than inventing a new secret type.
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 75
+    value: |
+      Unit tests (vitest, matching worker/src/*.test.js convention) for every pure/testable piece:
+      rate-limit message parsing (both "session limit" and "weekly limit" variants, extracting the
+      reset time + named timezone), next-available-alias selection logic (skipping cooldown'd
+      aliases, detecting all-exhausted), new KV key builders, and the sealed-box encryption helper
+      if isolated into a pure function. E2E (manual, by the user): real Slack workspace + real
+      repo + real GitHub secret — cannot be automated by the agent, same reasoning as
+      init-knowledge-command's own Testing section.
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 85
+    value: |
+      - A user runs `/switch-token <alias>` in a channel linked to a repo → that repo's
+        CLAUDE_CODE_OAUTH_TOKEN secret is updated to the pool's token for that alias.
+      - A user runs `/switch-token` with no argument → reply shows the repo's current alias and
+        every alias in the pool (with cooldown state).
+      - A user runs `/add-token <alias> <token>` → token stored in the shared pool under that
+        alias, usable by any repo afterward.
+      - A user runs `/remove-token <alias>` → token removed from the shared pool.
+      - An online-pipeline claude -p retry hits a rate-limit message → the workflow calls the
+        Worker, which picks the best available alias for that repo (skipping ones on cooldown) and
+        returns its plaintext token value directly (the job's own env is fixed for its lifetime, so
+        the workflow exports the returned value itself before retrying) while also updating the
+        repo's GitHub secret for future runs.
+      - A freshly bootstrapped repo (/new-project) is assigned a pool alias during
+        bootstrap-project.yml instead of always the same fixed token.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 70
+    value: "Drafted in user-spec.md directly from the above user stories + edge/error cases below."
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 80
+    value: |
+      - All pool aliases currently on cooldown (none available): both manual switch (if no
+        specific alias given and asked to auto-pick — not applicable, manual always names an
+        alias) and auto-switch fail with a clear message; auto-switch does not retry further
+        within that run.
+      - Rate-limit text that doesn't match either known pattern: treated as today's existing
+        technical failure (retry with the same token), not a new failure mode — auto-switch is
+        strictly additive to the existing retry loop, never a regression if detection misses.
+      - `/switch-token <alias>` where the alias doesn't exist in the pool: clear error, no change.
+      - `/remove-token` on the alias a repo is currently using: allowed (removes from the shared
+        pool); that repo's GitHub secret keeps the now-orphaned token value until the next
+        switch — not retroactively invalidated. `/switch-token` (status) for that repo marks the
+        now-removed alias explicitly (e.g. "work2 (đã bị xoá khỏi pool)") instead of showing it
+        as if it were still a normal pool member.
+      - Manual `/switch-token <alias>` on an alias currently marked on cooldown: allowed anyway —
+        the command always honors the explicit human choice; cooldown only gates automatic
+        selection (auto-switch picking on the repo's/caller's behalf), never a direct manual
+        request naming a specific alias.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 90
+    value: |
+      - GitHub secret-set API call fails (bad public key fetch, PUT rejected): command/auto-switch
+        reports the failure; does not silently claim success.
+      - Cooldown bookkeeping is itself best-effort: if a cooldown write to KV fails, the alias is
+        just not quarantined this time (fails open to "available", not a hard error) — consistent
+        with this codebase's existing "relay/KV failures must not block the primary action"
+        philosophy (see handleRelay's own KV-write-failure handling).
+      - The new Worker call itself fails (network error, timeout, non-2xx unrelated to "no alias
+        available"): treated exactly like a rate-limit-pattern miss — falls through to today's
+        existing retry-with-the-same-token behavior for that attempt. Auto-switch is strictly
+        additive; a dependency failure never makes retry behavior worse than before this feature.
+      - A rate-limit-triggered token switch consumes one of the existing `ATTEMPTS=3` retries in
+        implement.yml/knowledge-init.yml (and the new matching loop in userspec-turn) — it does
+        not add extra attempts beyond the existing cap. Worst case across a single run: up to 3
+        total `claude -p` invocations, each potentially on a different pool alias.
+      - A rate-limit interruption mid-implement (confirmed possible by the real log: the agent was
+        mid-task, "Removing web/vite.config.ts", when the limit hit) is handled exactly like any
+        other technical failure already is in implement.yml's existing loop: reset to `$LAST_GOOD`
+        (discarding that attempt's uncommitted work) before retrying with the newly-selected
+        token — no new "resume mid-attempt" mechanism, consistent with the loop's existing design.
+      - `/add-token <alias> <token>` where `<alias>` already exists in the pool: rejected with a
+        clear error (does not overwrite); the caller must `/remove-token <alias>` first to reuse
+        that name. Prevents any single linked-channel user from silently swapping the live token
+        value for an alias other repos currently depend on.
+      - `/add-token <alias>` with no token portion (nothing after the first whitespace, or no
+        whitespace at all): rejected with a usage error, same "clear error, no state change"
+        pattern as every other malformed-input case here — never stores an empty-string token.
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 75
+    value: |
+      Agent-side: unit tests for all pure logic (rate-limit parsing for both message variants,
+      reset-time-to-absolute-timestamp conversion per named timezone, alias-selection/cooldown
+      skip logic, KV key builders), `gh issue view`/workflow YAML dry inspection for the three
+      retry-loop integrations. User-side (manual, real Slack + GitHub + Worker deploy): trigger a
+      real switch, a real add/remove, and ideally reproduce a real rate-limit to confirm
+      auto-switch fires — acknowledged as hard to force on demand; a passive confirmation (watch
+      the next naturally-occurring rate-limit hit auto-switch correctly) is an acceptable fallback,
+      to be detailed in Verification.
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 90
+    value: |
+      Slack replies in Vietnamese, matching existing command style. `/switch-token` bare shows
+      current alias + full pool list with cooldown state (alias, cooling-down-until if applicable);
+      a current alias no longer in the pool is shown with an explicit "(đã bị xoá khỏi pool)"
+      note rather than silently looking like a normal member. No new command for "remove" beyond
+      `/remove-token <alias>` — explicitly requested.
+      `/add-token <alias> <token>`: split on the first whitespace run — `alias` is everything
+      before it, `token` is everything after (trimmed), matching the natural
+      `/add-token work2 sk-ant-oat01-...` usage. `alias` is restricted to a safe charset
+      (letters, digits, `-`, `_` — same spirit as `isValidRepoName`'s existing charset guard in
+      lib.js, reused/adapted rather than inventing a new one) since it becomes a KV key suffix and
+      appears unescaped in Slack replies; a token value is accepted as opaque free text (whatever
+      remains after the first whitespace), never echoed back in any reply.
+    gaps: []
+    required: false
+
+  risks:
+    score: 75
+    value: |
+      - New Worker dependency (sealed-box encryption) adds bundle size — must stay inside
+        Cloudflare Workers' script-size limit; use a minimal library.
+      - Rate-limit message-matching is exactly the kind of mistake made earlier this session (the
+        github-actions[bot] vs github-actions login bug) — must be verified against the real
+        strings already captured in this interview, not assumed.
+      - Returning a plaintext OAuth token in the Worker's HTTP response to the CI job is a new
+        exposure surface (mitigated: same trust tier as the GitHub secret itself, delivered over
+        HTTPS, authenticated by the existing SLACK_RELAY_TOKEN shared secret already trusted for
+        /relay).
+      - KV is not as access-isolated as a Worker "secret" — accepted per the user's explicit
+        choice in Q2.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 80
+    value: |
+      - New CI-facing Worker endpoint (e.g. POST /switch-token/auto) reuses the existing
+        X-Relay-Token / SLACK_RELAY_TOKEN auth scheme rather than a new secret.
+      - KV schema (exact keys decided during drafting/research): pool entries, per-repo current
+        alias, per-alias cooldown-until timestamp.
+      - Reset-time parsing uses JS Intl with the named IANA zone captured in the message (e.g.
+        "UTC", "Asia/Saigon") to compute the next absolute occurrence of the given local time.
+      - A rate-limit-triggered retry reuses implement.yml's existing reset-to-$LAST_GOOD mechanic
+        unchanged; userspec-turn gains a new matching 3-attempt loop (previously had none).
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 70
+    value: |
+      Requires: control-plane Worker redeploy (new commands, new endpoint, new dependency);
+      re-vendoring the three online-pipeline workflow YAMLs into every onboarded repo (same
+      vendor-skills.sh path used throughout this session); bootstrap-project.yml change takes
+      effect on the next /new-project run without extra steps once control-plane's own commit
+      lands.
+    gaps: []
+    required: false
+
+  manual_user_actions:
+    score: 70
+    value: |
+      - Deploy the Worker (wrangler deploy) after this change lands.
+      - Re-vendor online-pipeline in every repo that should get auto-switch (same manual step
+        already required after today's earlier relay fixes).
+      - Seed the pool with at least one real token via /add-token before anything can switch.
+    gaps: []
+    required: false
+
+integration:
+  integration_points:
+    score: 90
+    value: |
+      - control-plane/worker/src/index.js: new slash command handlers (switch/add/remove/status),
+        new POST endpoint for the CI-facing auto-switch call.
+      - control-plane/worker/src/github.js: new request builder(s) for the GitHub secrets API
+        (get public key, put encrypted secret).
+      - control-plane/.github/workflows/bootstrap-project.yml: initial token assignment from pool
+        instead of a fixed secret.
+      - molyanov-ai-dev/skills/online-pipeline/assets/workflows/online-pipeline-userspec.yml: "Run
+        userspec-turn" step has NO retry loop today (confirmed, line 225-293 — single claude -p
+        call under set -euo pipefail) — gets a new full 3-attempt retry loop matching
+        implement/knowledge-init's shape, both for auto-switch and as a side benefit (today any
+        crash there fails the whole run with zero retry).
+      - molyanov-ai-dev/skills/online-pipeline/assets/workflows/online-pipeline-implement.yml and
+        online-pipeline-knowledge-init.yml: existing 3-attempt retry loops (confirmed at
+        implement.yml:174-233, knowledge-init.yml:112-170) gain a rate-limit detection + Worker
+        call + retry step, inserted before each loop's existing success/failure classification.
+      - molyanov-ai-dev/skills/online-pipeline/SKILL.md: document the new behavior per stage.
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 70
+    value: "A minimal libsodium-sealed-box-compatible JS library for the Worker (exact package decided during research/drafting)."
+    gaps: []
+    required: false
+
+  technical_constraints:
+    score: 60
+    value: "Cloudflare Worker script-size budget; KV read/write is eventually-consistent-ish at the edge (acceptable for this use case's tolerance)."
+    gaps: []
+    required: false
+
+  data_requirements:
+    score: 70
+    value: "Cloudflare KV: pool (alias -> token), per-repo current-alias assignment, per-alias cooldown-until. Exact key scheme decided during drafting."
+    gaps: []
+    required: false
+
+  migration_needs:
+    score: 60
+    value: "Existing onboarded repos keep their current CLAUDE_CODE_OAUTH_TOKEN secret value until someone runs /switch-token on them or a rate-limit auto-switch fires; no forced migration."
+    gaps: []
+    required: false
+
+notes: ""
