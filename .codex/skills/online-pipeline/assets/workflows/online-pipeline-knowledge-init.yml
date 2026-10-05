@@ -135,16 +135,21 @@ jobs:
 
             AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
             if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
-              # Filtered to this workflow's own gh issue comment calls (always authored as
-              # github-actions[bot], the identity behind secrets.GITHUB_TOKEN) — never a human's
-              # GitHub comment or the Worker's own mirror of a Slack reply (posted with a real
-              # user's GH_PAT), either of which landing on the issue during this attempt's run
-              # window would otherwise get echoed straight back into the same Slack thread.
+              # Filtered to this workflow's own gh issue comment calls — always authored as
+              # "github-actions" (confirmed empirically via `gh issue view --json comments`; GitHub
+              # does NOT render this login as "github-actions[bot]" in this API, despite that being
+              # the common display name elsewhere) — never a human's GitHub comment or the Worker's
+              # own mirror of a Slack reply (posted with a real user's GH_PAT), either of which
+              # landing on the issue during this attempt's run window would otherwise get echoed
+              # straight back into the same Slack thread.
+              RELAY_COUNT=0
               while IFS= read -r COMMENT_JSON; do
                 COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
                 relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+                RELAY_COUNT=$((RELAY_COUNT + 1))
               done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
-                        | jq -c '.[] | select(.author.login == "github-actions[bot]") | .body')
+                        | jq -c '.[] | select(.author.login == "github-actions") | .body')
+              echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
             fi
             BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
 
