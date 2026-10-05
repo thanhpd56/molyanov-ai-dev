@@ -78,6 +78,8 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SLACK_RELAY_TOKEN: ${{ secrets.SLACK_RELAY_TOKEN }}
+      SLACK_WORKER_URL: ${{ secrets.SLACK_WORKER_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -139,6 +141,25 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
           STAGE_NAME="implement"
           if [ "$ROUTE_ACTION" = "resume" ]; then
             STAGE_NAME="implement-resume"
@@ -148,6 +169,12 @@ jobs:
           LAST_GOOD="$(git rev-parse HEAD)"
           ATTEMPTS=3
           RESULT="technical_error"
+          # Comment count, not status-file state — relaying is about mirroring gh issue comment
+          # calls to Slack, independent of why the agent made them. The agent itself never calls
+          # relay_to_slack anymore (see SKILL.md, Stage implement/implement-resume step 2) — in
+          # production it sometimes posted the comment but skipped its own relay reproduction, so
+          # this loop mirrors every new bot comment deterministically instead.
+          BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
 
           for ATTEMPT in 1 2 3; do
             echo "Implement attempt $ATTEMPT/$ATTEMPTS (stage: $STAGE_NAME)"
@@ -169,6 +196,19 @@ jobs:
             set +e
             claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
             set -e
+
+            AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+            if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+              RELAY_COUNT=0
+              while IFS= read -r COMMENT_JSON; do
+                COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+                relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+                RELAY_COUNT=$((RELAY_COUNT + 1))
+              done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                        | jq -c '.[] | select(.author.login == "github-actions") | .body')
+              echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
+            fi
+            BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
 
             STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo in_progress)"
 
@@ -208,5 +248,24 @@ jobs:
       - name: Report technical failure
         if: env.RESULT == 'technical_error'
         run: |
-          gh issue comment "$ISSUE_NUMBER" --body "Implement job failed after 3 attempts (2 retries). Check the Actions log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+          MESSAGE="Implement job failed after 3 attempts (2 retries). Check the Actions log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
+          relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"
           exit 1

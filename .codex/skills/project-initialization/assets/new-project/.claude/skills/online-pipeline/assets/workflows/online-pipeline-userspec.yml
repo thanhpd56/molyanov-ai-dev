@@ -181,6 +181,10 @@ jobs:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Both empty on a repo that never ran the Slack onboarding step — relay_to_slack (see
+      # skills/online-pipeline/SKILL.md, Slack Bridge) no-ops in that case, same as today.
+      SLACK_RELAY_TOKEN: ${{ secrets.SLACK_RELAY_TOKEN }}
+      SLACK_WORKER_URL: ${{ secrets.SLACK_WORKER_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -226,6 +230,31 @@ jobs:
           ACTION: ${{ needs.route.outputs.action }}
         run: |
           set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
+          # Comment count, not status-file state — see SKILL.md, Stage userspec-turn step 4: the
+          # agent never calls relay_to_slack itself anymore, since in production it sometimes
+          # posted the gh issue comment but skipped its own relay reproduction. This mirrors
+          # every new bot comment deterministically instead.
+          BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+
           PROMPT_FILE="$(mktemp)"
           {
             echo "Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"userspec-turn\"."
@@ -246,9 +275,40 @@ jobs:
           } > "$PROMPT_FILE"
           claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
 
+          AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+          if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+            RELAY_COUNT=0
+            while IFS= read -r COMMENT_JSON; do
+              COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+              relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+              RELAY_COUNT=$((RELAY_COUNT + 1))
+            done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                      | jq -c '.[] | select(.author.login == "github-actions") | .body')
+            echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
+          fi
+
       - name: Open or update the spec PR
         run: |
           set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
           STATUS="$(grep -oP '(?<=^status: ).*' "work/$SLUG/logs/working/online-pipeline-status.yml" 2>/dev/null || echo in_progress)"
           git push origin "HEAD:$BRANCH" || true
           if [ "$STATUS" != "ready_for_review" ]; then
@@ -264,4 +324,6 @@ jobs:
           fi
           PR_NUMBER="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
           ISSUE_NUMBER="${SLUG##*-}"
-          gh issue comment "$ISSUE_NUMBER" --body "Spec ready for review: #$PR_NUMBER. Comment \`/approve\` on that PR to continue."
+          MESSAGE="Spec ready for review: #$PR_NUMBER. Comment \`/approve\` on that PR to continue."
+          gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
+          relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"

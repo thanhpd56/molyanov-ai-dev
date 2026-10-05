@@ -74,9 +74,9 @@ scheme:
 
 The agent communicates with the user exclusively through `gh issue comment {issue_number} --body
 "..."` — chat/stdout output is not read by anyone in a CI job. Every stage prompt supplies the
-issue number explicitly; use it for every comment. On a repo onboarded to Slack (see Slack Bridge
-below), every one of these calls must be mirrored to the Slack thread through the `relay_to_slack`
-helper, with one documented exception — do not invent others.
+issue number explicitly; use it for every comment. Never call `relay_to_slack` yourself: on a repo
+onboarded to Slack (see Slack Bridge below), the workflow mirrors every one of these comments to
+the Slack thread deterministically after you exit — see Slack Bridge for why.
 
 ## Why Skills Must Be Vendored Into the Target Repo
 
@@ -136,8 +136,8 @@ The Worker drives interaction by calling the GitHub REST API directly (create is
 `/approve` comment, merge a PR) or by relaying into Slack — it never needs a new GitHub Actions
 event to fire any of this.
 
-**`relay_to_slack` — the one mirror helper, used identically from a stage prompt's own bash and
-from a workflow YAML step:**
+**`relay_to_slack` — the one mirror helper, called only from deterministic workflow YAML bash,
+never by the agent:**
 
 ```bash
 relay_to_slack() {
@@ -160,28 +160,35 @@ relay_to_slack() {
 ```
 
 `SLACK_RELAY_TOKEN` and `SLACK_WORKER_URL` are repo secrets set by the (now Slack-aware)
-`setup-online-pipeline.sh`; both workflow jobs that run `claude -p` export them so a stage prompt's
-own bash can call this helper, exactly like it already calls `gh issue comment`.
+`setup-online-pipeline.sh`; every workflow job that runs `claude -p` exports them.
 
-**Mirror points — call `relay_to_slack` immediately after, with the same text, at every point this
-skill already calls `gh issue comment`:**
+No stage prompt in this file ever calls `relay_to_slack` itself — every one of them (`userspec-turn`,
+`implement`/`implement-resume`, `knowledge-init`) originally did, by reproducing this bash block via
+its own tool calls on every turn, but in production this proved unreliable: the agent would
+sometimes post the `gh issue comment` and commit, but skip the relay call, so the message landed on
+GitHub and never reached Slack. Every one of these call sites was moved into deterministic workflow
+bash instead, each diffing `gh issue view --json comments` before/after the `claude -p` call(s) and
+relaying every newly-posted comment whose `.author.login` is exactly `github-actions` (the identity
+behind `secrets.GITHUB_TOKEN` — confirmed empirically against real comment data; note this is
+*not* `"github-actions[bot]"`, the display name used elsewhere). Filtering by that login excludes a
+human's own GitHub comment and the Worker's own mirror of a Slack reply (posted with a real user's
+PAT), either of which landing on the issue mid-run would otherwise get echoed straight back into
+the same Slack thread.
 
-- Stage `userspec-turn` step 4 (interview question / `awaiting_decision` stop).
-- Stage `implement` / `implement-resume` step 2 (`awaiting_decision` question or finding).
-- The workflow's own "Open or update the spec PR" step's closing `gh issue comment` (spec PR ready,
-  `/approve` instructions) — in `online-pipeline-userspec.yml`.
-- The workflow's own "Report technical failure" steps in `online-pipeline-implement.yml` and
-  `online-pipeline-finalize.yml`, after 3 failed attempts — these already call `gh issue comment`
-  today; Slack gets the identical message, not a special case.
-- `online-pipeline-knowledge-init.yml`'s own retry-loop step, after every `claude -p` attempt, and
-  its "Report technical failure" step after 3 failed attempts. Stage `knowledge-init` is the one
-  exception to "the agent calls `relay_to_slack` itself": in production, the agent reproducing that
-  bash block via its own tool calls on every single turn proved unreliable — it sometimes posts the
-  `gh issue comment` and commits but skips the relay call, so the question lands on GitHub and
-  never on Slack. The workflow instead diffs `gh issue view --json comments` before/after each
-  attempt and relays every newly-posted comment body deterministically, exactly once, regardless of
-  which step inside the stage posted it — see Stage `knowledge-init` below, which explicitly tells
-  the agent not to call `relay_to_slack` itself for this reason.
+**Mirror points — all deterministic workflow bash, never agent-executed:**
+
+- `online-pipeline-userspec.yml`'s "Run userspec-turn" step, after the single `claude -p` call
+  (interview question / `awaiting_decision` stop), and its "Open or update the spec PR" step's
+  closing `gh issue comment` (spec PR ready, `/approve` instructions) — the latter already ran as
+  deterministic bash and is unaffected by this change.
+- `online-pipeline-implement.yml`'s "Implement with retry" step, after every `claude -p` attempt
+  (`awaiting_decision` question or finding), and its "Report technical failure" step after 3 failed
+  attempts — the latter already ran as deterministic bash and is unaffected.
+- `online-pipeline-knowledge-init.yml`'s "Run knowledge-init turn with retry" step, after every
+  `claude -p` attempt, and its "Report technical failure" step after 3 failed attempts — the
+  latter already ran as deterministic bash and is unaffected.
+- `online-pipeline-finalize.yml`'s "Report technical failure" step, after 3 failed attempts — this
+  one never involved the agent calling `relay_to_slack` either; unaffected.
 
 **The one exception — Slack-only, no GitHub equivalent:** when `finalize` completes successfully,
 `online-pipeline-finalize.yml` posts "✅ Feature xong" (or equivalent) via `relay_to_slack` only.
@@ -223,8 +230,9 @@ Triggered once per issue comment (or once on issue open) by `online-pipeline-use
    interview loop as usual and post the next pending question (or next step) as a new comment.
 4. Whenever `user-spec-planning` would "ask the user" (interview questions, a completeness-checker
    gap, a `user_decision_required` validation finding), post the question with `gh issue comment`
-   instead of chat output, then call `relay_to_slack` (Slack Bridge above) with the same question
-   text. Write `status: awaiting_decision` to the status marker *before* this commit, not after:
+   instead of chat output — do not also call `relay_to_slack` yourself (Slack Bridge above); the
+   workflow mirrors it after you exit. Write `status: awaiting_decision` to the status marker
+   *before* this commit, not after:
    commit+push `logs/userspec/interview.yml` and the status marker (and any other changed state) to
    `userspec/{slug}` immediately, then exit 0. Writing status after the push would leave it
    uncommitted and invisible to any later run — each GitHub Actions run is a fresh checkout with no
@@ -252,8 +260,9 @@ workflow has already created `feature/{slug}` from `main` and checked it out.
 2. If a reviewer in `code-writing`'s review waves returns a finding with `user_decision_required:
    true` that is not a technical/tooling error: write `status: awaiting_decision` to the status
    marker, then commit it together with the work completed so far to `feature/{slug}` and push,
-   then post the question with `gh issue comment {issue_number}` and the same text via
-   `relay_to_slack {issue_number} "..."` (Slack Bridge above), then exit 0. **Write the status
+   then post the question with `gh issue comment {issue_number}` — do not also call
+   `relay_to_slack` yourself (Slack Bridge above); the workflow mirrors it after you exit. Then
+   exit 0. **Write the status
    marker and commit it before pushing, never after** — the next run that resumes this stop is a
    fresh checkout on a different runner with no disk continuity from this one; it can only see
    `awaiting_decision` if that commit actually reached `origin/feature/{slug}`. A status write that
@@ -307,9 +316,8 @@ Triggered once per issue comment (or once on issue open) by
 `documentation-writing`'s initial-documentation flow for the whole repository, not a single
 feature.
 
-Never call `relay_to_slack` yourself anywhere in this stage, unlike every other stage in this
-file — the workflow mirrors every `gh issue comment` you post to Slack deterministically after you
-exit (see Slack Bridge above). Just post the comment; do not also reproduce the relay call.
+As with every other stage, never call `relay_to_slack` yourself here (see Slack Bridge above) —
+just post the comment; the workflow mirrors it to Slack deterministically after you exit.
 
 1. Always start by running `create-project-knowledge.md`'s Phase 0 (Start or Resume), regardless of
    how many times this stage has already run for this issue. Phase 0's own repository/

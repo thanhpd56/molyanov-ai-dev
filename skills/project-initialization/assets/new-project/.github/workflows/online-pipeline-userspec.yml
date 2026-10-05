@@ -230,6 +230,31 @@ jobs:
           ACTION: ${{ needs.route.outputs.action }}
         run: |
           set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
+          # Comment count, not status-file state — see SKILL.md, Stage userspec-turn step 4: the
+          # agent never calls relay_to_slack itself anymore, since in production it sometimes
+          # posted the gh issue comment but skipped its own relay reproduction. This mirrors
+          # every new bot comment deterministically instead.
+          BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+
           PROMPT_FILE="$(mktemp)"
           {
             echo "Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"userspec-turn\"."
@@ -249,6 +274,18 @@ jobs:
             echo "ONLINE_PIPELINE_AUTOMATED"
           } > "$PROMPT_FILE"
           claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
+
+          AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+          if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+            RELAY_COUNT=0
+            while IFS= read -r COMMENT_JSON; do
+              COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+              relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+              RELAY_COUNT=$((RELAY_COUNT + 1))
+            done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                      | jq -c '.[] | select(.author.login == "github-actions") | .body')
+            echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
+          fi
 
       - name: Open or update the spec PR
         run: |
