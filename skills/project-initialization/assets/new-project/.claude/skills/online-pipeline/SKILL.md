@@ -173,6 +173,18 @@ behind `secrets.GITHUB_TOKEN` — confirmed empirically against real comment dat
 *not* `"github-actions[bot]"`, the display name used elsewhere). Filtering by that login excludes a
 human's own GitHub comment and the Worker's own mirror of a Slack reply (posted with a real user's
 PAT), either of which landing on the issue mid-run would otherwise get echoed straight back into
+the same thread.
+
+Telling the agent not to self-relay is prose, not a guarantee — in production the agent kept
+calling `relay_to_slack` itself anyway often enough to cause real duplicate Slack posts (the
+deterministic relay delivering the message once, the agent's own reproduction delivering it again).
+Every `claude -p` invocation in `online-pipeline-userspec.yml`, `online-pipeline-implement.yml`,
+and `online-pipeline-knowledge-init.yml` now blanks `SLACK_RELAY_TOKEN`/`SLACK_WORKER_URL` for that
+child process specifically (`SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" claude -p ...`) — the surrounding
+shell step keeps the real values for its own deterministic relay call after `claude -p` exits, but
+the agent's own environment never has them, so any self-relay attempt is a harmless no-op (the
+`relay_to_slack` reference implementation's own `-z` guard) or at worst an unauthorized 401, never
+a second real post. This is the actual enforcement; the prose instruction documents intent only.
 the same Slack thread.
 
 **Mirror points — all deterministic workflow bash, never agent-executed:**

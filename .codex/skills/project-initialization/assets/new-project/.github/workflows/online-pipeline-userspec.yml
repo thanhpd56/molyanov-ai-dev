@@ -273,7 +273,12 @@ jobs:
             echo ""
             echo "ONLINE_PIPELINE_AUTOMATED"
           } > "$PROMPT_FILE"
-          claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
+          # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
+          # (the surrounding shell keeps the real values for the deterministic relay below) — the
+          # agent must never self-relay (see SKILL.md), and a prose instruction alone proved
+          # insufficient to guarantee that in production: this makes any self-relay attempt a
+          # harmless no-op/401 instead of a real duplicate Slack post.
+          SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
 
           AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
           if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
