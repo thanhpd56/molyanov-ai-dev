@@ -14,10 +14,6 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
-  # Without this, GitHub rejects any push that touches .github/workflows/* with "refusing to
-  # allow a GitHub App to create or update workflow ... without `workflows` permission" — hit in
-  # production when an implementation legitimately needed to add/edit a CI workflow file.
-  workflows: write
 
 jobs:
   route:
