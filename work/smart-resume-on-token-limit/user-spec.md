@@ -54,9 +54,12 @@ toàn bộ từ đầu vừa tốn thời gian, vừa có thể khiến agent ra
      đã có, không đổi).
 
 3. Khi `try_rate_limit_switch` thành công (token đã đổi):
-   - **Không** chạy `git push --force` + `git reset --hard $LAST_GOOD` (hoặc `git reset --hard
-     origin/main` ở `knowledge-init`) + `git clean -fd` như hiện tại — giữ nguyên toàn bộ file đã
-     sửa + commit cục bộ của attempt đó.
+   - **Không** chạy bước reset-và-dọn hiện tại của stage đó — ở `implement`/`userspec-turn`:
+     `git push --force` về `$LAST_GOOD` + `git reset --hard $LAST_GOOD` + `git clean -fd`; ở
+     `knowledge-init` (không có commit cục bộ nào để push lại, chỉ có working-tree edits chưa
+     commit): `git reset --hard origin/main` + `git clean -fd`, không có bước push nào. Bỏ qua
+     đúng bước reset/clean tương ứng của từng stage — giữ nguyên toàn bộ file đã sửa + commit cục
+     bộ (nếu có) của attempt đó.
    - Gọi lại `claude -p` với `CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN"` (giá trị mới) kèm flag
      `-c`/`--continue` để tiếp tục đúng hội thoại gần nhất trong cùng working directory, cùng 1
      prompt ngắn (khác hẳn `PROMPT_FILE` gốc) thông báo token đã được refresh do rate-limit và yêu
@@ -217,11 +220,17 @@ toàn bộ từ đầu vừa tốn thời gian, vừa có thể khiến agent ra
 workflow YAML), giống đúng tính chất của phần rate-limit-detection ở `control-plane-token-switch`
 ("không viết được bằng unit test JS").
 
-**Integration tests:** không cần hạ tầng riêng — dùng 1 file output giả ($CLAUDE_OUTPUT_FILE giả)
-chứa đúng 1 trong 2 chuỗi rate-limit, chạy thử cục bộ đúng đoạn bash match-pattern + logic 2-counter
-(tách phần đó ra khỏi lời gọi `claude -p` thật) để xác nhận: (a) rate-limit resume không tăng
-`ATTEMPT` kỹ thuật, (b) lỗi không khớp mẫu/Worker lỗi vẫn rơi đúng về nhánh reset cũ tính vào
-`ATTEMPTS`, (c) `SWITCH_EXHAUSTED` vẫn dừng loop đúng như cũ. Xem Agent Verification bước 1.
+**Integration tests:** không cần hạ tầng riêng — tách đoạn bash match-pattern + `try_rate_limit_switch`
++ logic 2-counter ra khỏi lời gọi `claude -p` thật, chạy thử cục bộ với 2 input giả:
+(1) `$CLAUDE_OUTPUT_FILE` giả chứa đúng 1 trong 2 chuỗi rate-limit (hoặc không khớp, để test nhánh
+ngược); (2) phản hồi giả của `POST $SLACK_WORKER_URL/switch-token/auto` — override hàm gọi `curl`
+đó (hoặc trỏ `$SLACK_WORKER_URL` vào 1 local mock HTTP server tối giản) để trả lần lượt
+`{ok:true,...}`, `{ok:false,error:"no_alias_available"}`, và 1 lỗi mạng/5xx chung — không cần
+gọi Worker thật hay rút cạn pool thật. Dùng 2 input giả này để xác nhận: (a) rate-limit resume
+không tăng `ATTEMPT` kỹ thuật, (b) lỗi không khớp mẫu/Worker lỗi mạng chung vẫn rơi đúng về nhánh
+reset cũ tính vào `ATTEMPTS`, (c) `SWITCH_EXHAUSTED` (từ `no_alias_available`) vẫn dừng loop đúng
+như cũ, (d) baseline không advance qua nhiều lần resume thành công liên tiếp (đúng limitation đã
+chấp nhận ở Risk 1). Xem Agent Verification bước 1-2.
 
 **E2E tests:** cần, nhưng không thể ép xảy ra theo ý muốn — rate-limit Claude thật phụ thuộc hạn mức
 thật của account. Xác nhận bằng quan sát thụ động lần rate-limit tự nhiên tiếp theo trong production
@@ -233,11 +242,16 @@ thật của account. Xác nhận bằng quan sát thụ động lần rate-limi
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Dựng 1 file output giả chứa đúng chuỗi `"You've hit your session limit"` (và riêng 1 lần với `"...weekly limit"`), chạy thử đoạn bash match-pattern + logic 2-counter cục bộ (không gọi `claude -p` thật) | Rate-limit resume được kích hoạt đúng: không có `git reset`/`git clean`; `ATTEMPT` kỹ thuật không tăng; log có dòng phân biệt "Rate-limit resume #N". |
-| 2. Dựng 1 file output giả KHÔNG khớp cả 2 mẫu rate-limit, chạy lại cùng đoạn bash | Rơi đúng về nhánh technical-failure cũ: `git reset` chạy, `ATTEMPT` kỹ thuật tăng 1 — y hệt hành vi trước feature này. |
-| 3. Đọc lại cả 3 workflow sau khi sửa (`online-pipeline-implement.yml`, `online-pipeline-knowledge-init.yml`, `online-pipeline-userspec.yml`) | Logic rate-limit-resume giống nhau cả 3 file; `ATTEMPT` kỹ thuật và counter rate-limit-resume tách biệt rõ; fallback khi lệnh resume tự lỗi kỹ thuật đúng như spec. |
-| 4. Kiểm tra `diff` giữa 6 bản tracked của mỗi workflow YAML (nguồn, vendor skill, vendor `.github/workflows/`, + 3 mirror `.codex/`) và 4 bản tracked của `SKILL.md` (nguồn, vendor, 2 mirror `.codex/`) | `diff` sạch, đúng quy ước đồng bộ đã áp dụng xuyên suốt `online-pipeline`. |
-| 5. Đọc lại `skills/online-pipeline/SKILL.md` sau khi sửa | Có mục mô tả rõ "rate-limit resume" cho cả 3 stage, phân biệt rõ với "implement-resume"/decision-resume đã có sẵn, nêu rõ 2 cơ chế không giao nhau. |
+| 1. Dựng 1 file output giả chứa đúng chuỗi `"You've hit your session limit"` (và riêng 1 lần với `"...weekly limit"`) + stub `switch-token/auto` trả `{ok:true,...}` (xem Testing), chạy thử đoạn bash match-pattern + logic 2-counter cục bộ (không gọi `claude -p` thật) | Rate-limit resume được kích hoạt đúng (AC1): không có `git reset`/`git clean`; `ATTEMPT` kỹ thuật không tăng; log có dòng phân biệt "Rate-limit resume #N". |
+| 2. Dựng 1 file output giả KHÔNG khớp cả 2 mẫu rate-limit, chạy lại cùng đoạn bash | Rơi đúng về nhánh technical-failure cũ (AC2): `git reset` chạy, `ATTEMPT` kỹ thuật tăng 1 — y hệt hành vi trước feature này. |
+| 3. Dựng 1 file output giả khớp mẫu rate-limit NHƯNG stub `switch-token/auto` trả 1 lỗi mạng/5xx chung (khác `no_alias_available`), chạy lại cùng đoạn bash | Rơi về đúng nhánh technical-failure cũ (AC3): `git reset` chạy, `ATTEMPT` kỹ thuật tăng 1, không bị coi là rate-limit resume. |
+| 4. Dựng cùng file output giả khớp mẫu rate-limit, stub `switch-token/auto` trả `{ok:false, error:"no_alias_available"}` | Dừng ngay (AC4): `SWITCH_EXHAUSTED=true`, không chạy thêm attempt nào, báo lỗi đúng message hiện có — hành vi không đổi so với trước feature này. |
+| 5. Giả lập stub `switch-token/auto` trả `{ok:true,...}` 1 lần (rate-limit resume thành công, có thêm 1 commit test), sau đó giả lập 1 lỗi kỹ thuật thường (không phải rate-limit) ngay lượt kế | Fallback reset về đúng baseline ban đầu — trước cả lần resume (AC6); xoá luôn commit test vừa thêm — đúng limitation đã chấp nhận ở Risk 1, không phải bug cần sửa. |
+| 6. Giả lập 3 lần stub `switch-token/auto` trả `{ok:true,...}` liên tiếp (pool "còn nhiều token") trong 1 lần chạy thử | Cả 3 lần đều không tăng `ATTEMPT` kỹ thuật (AC7); không bị `ATTEMPTS=3` chặn lại; loop chỉ dừng khi stub trả `no_alias_available`. |
+| 7. Đọc lại cả 3 workflow sau khi sửa (`online-pipeline-implement.yml`, `online-pipeline-knowledge-init.yml`, `online-pipeline-userspec.yml`) | Logic rate-limit-resume giống nhau cả 3 file; `ATTEMPT` kỹ thuật và counter rate-limit-resume tách biệt rõ; fallback khi lệnh resume tự lỗi kỹ thuật đúng như spec; bước reset/clean bị bỏ qua đúng với từng stage (có/không có `git push --force` tuỳ stage). |
+| 8. Kiểm tra `diff` giữa 6 bản tracked của mỗi workflow YAML (nguồn, vendor skill, vendor `.github/workflows/`, + 3 mirror `.codex/`) | `diff` sạch hoàn toàn (không có ngoại lệ nào cho workflow YAML). |
+| 9. Kiểm tra `diff` giữa 4 bản tracked của `SKILL.md` (nguồn, vendor, 2 mirror `.codex/`) | `diff` sạch, **trừ đúng 1 dòng header `<!-- Generated by sync-to-codex v1. Do not edit directly. -->`** mà `.codex/skills/online-pipeline/SKILL.md` luôn có thêm (quy ước tự động của `sync-to-codex.py` cho mọi file `.md`, không phải lỗi) — không áp dụng cho các workflow YAML ở bước 8. |
+| 10. Đọc lại `skills/online-pipeline/SKILL.md` sau khi sửa | Có mục mô tả rõ "rate-limit resume" cho cả 3 stage, phân biệt rõ với "implement-resume"/decision-resume đã có sẵn, nêu rõ 2 cơ chế không giao nhau. |
 
 ### User Verification
 
