@@ -1,0 +1,346 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-06 00:00:00"
+  last_updated: "2026-10-06 00:10:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
+conversation_history:
+  - asked_at: "2026-10-06 00:00:00"
+    topic_keys: ["feature_description", "user_problem", "constraints", "technical_decisions"]
+    agent_questions: |
+      Bối cảnh đã nắm: cả 3 workflow (userspec-turn, implement, knowledge-init) có loop
+      ATTEMPTS=3; mỗi attempt fail đều git reset --hard về LAST_GOOD rồi gửi lại prompt gốc từ
+      đầu ở attempt kế, áp dụng cho mọi loại lỗi kể cả rate-limit. Claude Code CLI hỗ trợ
+      -r/--resume <session-id> và -c/--continue ở mode -p, cộng --session-id <uuid>.
+
+      1. "Limit time của token" — có phải chính là rate-limit Claude (session 5h / weekly 7
+         ngày) mà auto-switch hiện tại đã detect qua 2 chuỗi "You've hit your session limit" /
+         "...weekly limit"? Hay còn tính cả GitHub Actions job timeout (job/runner bị huỷ hoàn
+         toàn — không có gì để --resume vì runner mới trắng tinh)?
+      2. Resume áp dụng cho cả 3 stage, hay chỉ implement (nơi duy nhất có "code dở" đáng giữ)?
+      3. "Tiếp tục từ đó" là (a) dùng --resume/-c của Claude Code để agent nhớ lại toàn bộ ngữ
+         cảnh, không cần gửi lại prompt gốc; hay (b) chỉ bỏ git reset, gửi prompt mới bảo agent
+         tự xem git diff/log rồi tiếp tục?
+      4. ATTEMPTS=3 hiện tại — resume do rate-limit vẫn tính vào 3 lần, hay tách riêng counter?
+    user_answer: |
+      1. loại 1 (chỉ rate-limit Claude, không tính GitHub Actions job timeout)
+      2. cả 3 stage
+      3. (a) dùng --resume/-c của Claude Code
+      4. tách riêng counter khỏi ATTEMPTS=3
+
+  - asked_at: "2026-10-06 00:05:00"
+    topic_keys: ["constraints", "technical_decisions", "error_scenarios"]
+    agent_questions: |
+      1. Giới hạn số lần resume-do-rate-limit liên tiếp: chỉ dựa vào SWITCH_EXHAUSTED (pool hết
+         token khả dụng) làm giới hạn tự nhiên, hay thêm cap cứng (ví dụ tối đa 5 lần)?
+      2. Nếu lệnh resume (claude -p -c/-r ...) bản thân lỗi kỹ thuật (không phải rate-limit nữa) —
+         fallback về đúng hành vi cũ (git reset LAST_GOOD, tính vào 3 ATTEMPTS)?
+      3. Dùng -c/--continue (tiếp tục hội thoại gần nhất trong cùng cwd) thay vì tự generate
+         --session-id tường minh — đồng ý chứ?
+      4. Sau khi resume thành công, logic detect STATUS/relay Slack... giữ nguyên không đổi, chỉ
+         thêm 1 dòng log phân biệt "Resumed after rate-limit (resume #N)"?
+    user_answer: |
+      1. Không cap cứng.
+      2. đúng
+      3. ok
+      4. ok
+
+  - asked_at: "2026-10-06 00:10:00"
+    topic_keys: ["success_criteria", "testing_strategy", "verification_strategy", "edge_cases"]
+    agent_questions: |
+      1. Thuật ngữ "rate-limit resume" (phân biệt với "implement-resume" có sẵn) — đồng ý?
+      2. Success criteria: 1 lần rate-limit thật giữa lúc implement đang code → đổi token, agent
+         tiếp tục đúng code dở (không reset), cuối cùng ra PR bình thường. Đúng kỳ vọng?
+      3. Verification: rate-limit thật khó ép xảy ra — chấp nhận (a) đọc lại logic bash, hay muốn
+         (b) dựng sẵn 1 file output giả chứa đúng chuỗi lỗi để chạy thử logic match + 2-counter
+         cục bộ, không cần claude -p thật?
+      4. userspec-turn/knowledge-init dùng chung y hệt logic với implement, không cần tiêu chí
+         riêng — đúng không?
+    user_answer: |
+      1. ok
+      2. đủ rồi
+      3. cách (b) — dựng sẵn 1 file output giả
+      4. đúng, dùng chung
+# Entry format:
+# - asked_at: "YYYY-MM-DD HH:MM:SS"
+#   topic_keys: ["user_problem", "success_criteria"]
+#   agent_questions: |
+#     Full question batch, verbatim.
+#   user_answer: |
+#     Full user answer, verbatim.
+
+general_understanding:
+  feature_name:
+    score: 90
+    value: "smart-resume-on-token-limit — cơ chế resume thông minh khi hết hạn mức token Claude"
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 80
+    value: |
+      Khi claude -p (trong cả 3 stage của online-pipeline: userspec-turn, implement,
+      knowledge-init) bị chặn giữa lúc đang chạy bởi rate-limit Claude thật (session 5h hoặc
+      weekly 7 ngày — 2 chuỗi lỗi đã được match sẵn bởi cơ chế auto-switch có từ
+      control-plane-token-switch), thay vì git reset --hard về LAST_GOOD + gửi lại prompt gốc từ
+      đầu ở attempt kế (hành vi hiện tại cho MỌI loại lỗi kỹ thuật kể cả rate-limit), hệ thống chỉ
+      đổi token (đã có) rồi dùng -r/--resume hoặc -c/--continue của Claude Code CLI để tiếp tục
+      ĐÚNG hội thoại/ngữ cảnh cũ — không mất code/tiến độ đã làm trong attempt đó. Chỉ áp dụng khi
+      resume trong CÙNG 1 job/runner (session data local) — không áp dụng cho GitHub Actions job
+      timeout (runner bị huỷ hoàn toàn, không có gì để resume).
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 85
+    value: |
+      Trước feature này, 1 lần rate-limit Claude giữa lúc implement đang code (ví dụ agent đang
+      sửa file dở) làm mất toàn bộ phần việc attempt đó — bị reset về LAST_GOOD, attempt kế phải
+      làm lại từ đầu, tốn thêm thời gian + token của account mới dù vấn đề chỉ là "hết hạn mức",
+      không phải lỗi logic. Quyết định này đã được chốt rõ là explicit limitation ở
+      control-plane-token-switch ("không xây cơ chế resume giữa chừng mới"); feature này đảo lại
+      quyết định đó cho đúng 1 trường hợp: rate-limit Claude thật.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 0
+    value: ""
+    gaps: ["Identify affected users when applicable"]
+    required: false
+
+  success_criteria:
+    score: 90
+    value: |
+      1 lần rate-limit Claude thật xảy ra giữa lúc 1 stage (implement/knowledge-init/
+      userspec-turn) đang chạy claude -p → sau khi switch-token/auto thành công, hệ thống gọi
+      claude -p -c (không git reset) → agent tiếp tục đúng công việc dở (file/commit cũ còn
+      nguyên) → cuối cùng stage đó vẫn hoàn tất bình thường (ra PR cho implement, commit cho
+      knowledge-init, PR userspec cho userspec-turn) — không mất tiến độ đã làm trước lúc bị
+      limit. Lượt rate-limit-resume không trừ vào 3 ATTEMPTS kỹ thuật hiện có.
+    gaps: []
+    required: true
+
+  constraints:
+    score: 85
+    value: |
+      - Chỉ xử lý rate-limit Claude thật (2 chuỗi đã match sẵn), không mở rộng sang GitHub Actions
+        job timeout.
+      - Resume do rate-limit KHÔNG tính vào ATTEMPTS=3 kỹ thuật hiện có; không cap cứng số lần
+        resume liên tiếp — dựa hoàn toàn vào SWITCH_EXHAUSTED (pool hết token) làm giới hạn tự
+        nhiên.
+      - Dùng -c/--continue của Claude Code CLI (không tự generate --session-id).
+      - Lệnh resume tự thất bại kỹ thuật → fallback về hành vi reset-LAST_GOOD cũ, tính vào 3
+        ATTEMPTS.
+      - Áp dụng cho cả 3 stage (implement, knowledge-init, userspec-turn), đồng bộ cả 4 bản tracked
+        của mỗi file (nguồn + vendor + 2 mirror .codex) — đúng quy ước sẵn có.
+      - Không đổi gì ở repo control-plane riêng.
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 85
+    value: |
+      Logic sống trong bash của 3 workflow YAML — không viết được unit test JS (giống rate-limit
+      detection của control-plane-token-switch). Thay vào đó: dựng sẵn 1 file "giả"
+      ($CLAUDE_OUTPUT_FILE giả) chứa đúng 1 trong 2 chuỗi rate-limit đã match, chạy thử cục bộ
+      đúng đoạn bash match-pattern + logic 2-counter (ATTEMPT kỹ thuật tối đa 3 vs resume-counter
+      không giới hạn) tách ra khỏi phần gọi claude -p thật, để xác nhận: (a) rate-limit resume
+      không làm tăng ATTEMPT kỹ thuật, (b) lỗi không khớp mẫu/Worker lỗi vẫn rơi đúng về nhánh
+      reset-LAST_GOOD cũ tính vào ATTEMPTS, (c) SWITCH_EXHAUSTED vẫn dừng loop đúng như cũ.
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 85
+    value: |
+      Người vận hành online-pipeline (không cần biết chi tiết): đang chạy 1 feature qua
+      implement/userspec-turn/knowledge-init, account Claude cạn hạn mức giữa lúc agent đang code
+      dở → trước đây: attempt đó mất hết, lượt kế làm lại từ đầu (tốn thời gian + có thể lệch kết
+      quả vì agent "quên" những gì đã làm). Sau feature này: hệ thống tự đổi token (đã có từ
+      control-plane-token-switch) + tự nối lại đúng session cũ bằng claude -p -c → agent "nhớ"
+      toàn bộ việc đang làm, tiếp tục ngay, không cần người can thiệp, không mất tiến độ.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 85
+    value: |
+      - [ ] Rate-limit match (2 chuỗi đã xác nhận) + switch-token/auto trả {ok:true} → KHÔNG git
+        reset/git clean, gọi claude -p -c với CURRENT_TOKEN mới + 1 prompt ngắn thông báo token đã
+        refresh; attempt này KHÔNG tăng biến ATTEMPT kỹ thuật.
+      - [ ] Output không khớp 2 mẫu rate-limit, hoặc switch-token/auto lỗi (network/5xx, không
+        phải no_alias_available) → hành vi y hệt trước feature này: reset LAST_GOOD/origin-main,
+        tính vào 1 trong 3 ATTEMPTS.
+      - [ ] switch-token/auto trả {ok:false, error:"no_alias_available"} → dừng ngay, báo lỗi rõ,
+        y hệt hành vi đã có (không đổi).
+      - [ ] Switch thành công nhưng claude -p -c tự lỗi kỹ thuật → fallback reset-LAST_GOOD, tính
+        vào 1 trong 3 ATTEMPTS (không coi là rate-limit-resume).
+      - [ ] 3 lần rate-limit-resume liên tiếp (pool còn token) trong 1 job → không bị chặn bởi
+        ATTEMPTS=3 (vì không tính vào counter đó), chỉ dừng khi SWITCH_EXHAUSTED.
+      - [ ] Cả 3 workflow (implement/knowledge-init/userspec-turn) đồng bộ logic này; diff sạch
+        giữa 4 bản tracked mỗi file (xem integration_points).
+      - [ ] skills/online-pipeline/SKILL.md (4 bản tracked) mô tả rõ "rate-limit resume" (dùng
+        thuật ngữ khác "implement-resume" có sẵn).
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 80
+    value: |
+      - Rate-limit lặp lại nhiều lần liên tiếp (pool nhiều token) → không cap cứng, chỉ dừng khi
+        hết pool (SWITCH_EXHAUSTED) — chấp nhận theo quyết định user (câu 1 batch 2).
+      - claude -p -c tự lỗi kỹ thuật (session not found, CLI crash) sau khi token đã đổi thành
+        công → coi là lỗi kỹ thuật thường, fallback reset+retry, tính vào ATTEMPTS=3.
+      - knowledge-init/userspec-turn (không có "code dở" nhiều ý nghĩa như implement) vẫn dùng
+        chung y hệt logic rate-limit-resume — không cần nhánh riêng.
+      - GitHub-hosted runner luôn là VM mới mỗi job → không có rủi ro resume nhầm session cũ từ 1
+        job khác (session data local, theo cwd, không tồn tại cross-job).
+      - Rate-limit xảy ra ở stage implement khi ROUTE_ACTION="resume" (nghĩa gốc — job mới do user
+        trả lời câu hỏi quyết định): không ảnh hưởng gì khác — đây vẫn là 1 job/runner mới, rate-
+        limit-resume (claude -p -c) hoạt động độc lập, bình thường bên trong job đó như mọi job
+        khác; 2 khái niệm "resume" không giao nhau.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 80
+    value: |
+      - Output không khớp 2 mẫu rate-limit, hoặc gọi Worker switch-token/auto lỗi (network/5xx,
+        khác {ok:false,error:"no_alias_available"}) → hành vi KHÔNG đổi so với trước feature này:
+        rơi về technical-failure path (reset LAST_GOOD, tính vào 3 ATTEMPTS).
+      - {ok:false, error:"no_alias_available"} (pool hết token khả dụng) → dừng ngay, báo lỗi rõ
+        (hành vi đã có từ control-plane-token-switch, không đổi).
+      - Switch token thành công NHƯNG lệnh resume (claude -p -c ...) tự lỗi kỹ thuật (session
+        not found, CLI crash,...) → fallback reset-LAST_GOOD + retry từ đầu, tính vào 3 ATTEMPTS
+        (không coi là rate-limit resume nữa).
+      - Resume thành công nhưng agent lại gặp rate-limit gần như ngay sau đó → lặp lại
+        switch+resume bình thường, chỉ dừng khi pool thật sự hết (SWITCH_EXHAUSTED).
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 85
+    value: |
+      Agent Verification: (1) chạy thử bash match-pattern + 2-counter cục bộ với file output giả
+      (xem testing_strategy) cho cả 2 chuỗi rate-limit, xác nhận đúng nhánh; (2) đọc lại cả 3
+      workflow sau khi sửa, xác nhận ATTEMPT kỹ thuật không tăng khi rate-limit-resume, reset
+      LAST_GOOD/origin-main chỉ chạy ở nhánh technical-failure thật; (3) diff sạch giữa 4 bản
+      tracked của mỗi file (3 workflow + SKILL.md). User Verification: rate-limit thật khó ép xảy
+      ra theo ý muốn — xác nhận thụ động, theo dõi log Actions ở lần rate-limit tự nhiên tiếp
+      theo trong production (giống cách verify đã chấp nhận ở control-plane-token-switch).
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    value: ""
+    gaps: ["Describe UI or UX requirements when applicable"]
+    required: false
+
+  risks:
+    score: 80
+    value: |
+      - Risk: nhầm lẫn với mechanism "resume" có sẵn (ROUTE_ACTION='resume'/stage
+        'implement-resume'). Mitigation: dùng thuật ngữ riêng "rate-limit resume" xuyên suốt log/
+        SKILL.md/biến bash (đã chốt, xem technical_decisions).
+      - Risk: claude -p -c continue sai hội thoại nếu có >1 session trong cùng cwd. Mitigation:
+        trong loop này chỉ có đúng 1 claude -p active tại 1 thời điểm mỗi job — "gần nhất" luôn
+        đúng (đã xác nhận qua code research, không cần --session-id tường minh).
+      - Risk: không cap cứng số lần resume liên tiếp có thể kéo dài thời gian job nếu pool có
+        nhiều token. Mitigation: chấp nhận theo lựa chọn rõ của user (câu 1 batch 2) — dựa vào
+        SWITCH_EXHAUSTED làm giới hạn tự nhiên, không mitigate thêm cho v1.
+      - Risk: rate-limit thật khó ép xảy ra để test — mitigation: file output giả cho phần logic
+        bash cục bộ (testing_strategy) + xác nhận thụ động khi xảy ra thật trong production.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 85
+    value: |
+      - Dùng -c/--continue (không --session-id tường minh) — đơn giản hơn, mỗi loop chỉ có đúng 1
+        lời gọi claude -p active tại 1 thời điểm trong cùng cwd nên "gần nhất" luôn đúng ý.
+      - Vòng lặp attempt cần tách thành 2 counter độc lập: ATTEMPT kỹ thuật (tối đa 3, chỉ tăng khi
+        lỗi KHÔNG phải rate-limit) và số lần resume-do-rate-limit (không giới hạn cứng, chỉ dừng
+        khi SWITCH_EXHAUSTED).
+      - Naming collision đã biết: codebase đã dùng "resume" cho 1 cơ chế khác hẳn — ROUTE_ACTION
+        'resume'/stage 'implement-resume' (job MỚI chạy lại khi user trả lời câu hỏi quyết định
+        giữa kỳ, không có session CLI nào để tiếp tục). Cơ chế mới (CLI --continue do rate-limit,
+        trong CÙNG job) phải dùng thuật ngữ khác trong log/SKILL.md/code để không nhầm 2 khái
+        niệm — ví dụ "rate-limit resume"/"session resume" vs "decision resume".
+      - Rejected: tự generate + truyền tường minh --session-id qua các attempt (phức tạp hơn mức
+        cần, -c đã đủ vì chỉ có 1 session active per job).
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 0
+    value: ""
+    gaps: ["Describe deployment and required configuration when applicable"]
+    required: false
+
+  manual_user_actions:
+    score: 0
+    value: ""
+    gaps: ["List manual setup or launch actions when applicable"]
+    required: false
+
+integration:
+  integration_points:
+    score: 85
+    value: |
+      Sửa bash trong "Implement with retry"/tương đương của cả 3 workflow:
+      - skills/online-pipeline/assets/workflows/online-pipeline-implement.yml
+      - skills/online-pipeline/assets/workflows/online-pipeline-knowledge-init.yml
+      - skills/online-pipeline/assets/workflows/online-pipeline-userspec.yml
+      Mỗi file có đúng 4 bản tracked phải đồng bộ (nguồn, mirror .codex của nguồn, vendor trong
+      skills/project-initialization/assets/new-project/..., mirror .codex của vendor) — xem
+      code-research.md. Cập nhật skills/online-pipeline/SKILL.md (cũng 4 bản tracked) mô tả hành
+      vi mới. Không đổi gì ở repo control-plane riêng (endpoint switch-token/auto giữ nguyên).
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 0
+    value: ""
+    gaps: ["Identify relevant existing features, services, or libraries"]
+    required: false
+
+  technical_constraints:
+    score: 0
+    value: ""
+    gaps: ["Resolve applicable performance, security, or platform limits"]
+    required: false
+
+  data_requirements:
+    score: 0
+    value: ""
+    gaps: ["Describe required data, sources, destinations, and persistence"]
+    required: false
+
+  migration_needs:
+    score: 0
+    value: ""
+    gaps: ["Describe migration and compatibility needs when applicable"]
+    required: false
+
+notes: ""
