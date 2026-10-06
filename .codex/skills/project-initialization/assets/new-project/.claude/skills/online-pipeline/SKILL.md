@@ -220,14 +220,75 @@ posts into a thread never loop back as a duplicate `gh issue comment` or a spuri
 of this is implemented in this skill or these workflows — it lives entirely in the control-plane
 repo's Worker source.
 
+## Rate-Limit Auto-Switch (control-plane token pool)
+
+Optional, additive on top of the Slack Bridge above — a repo without `SLACK_RELAY_TOKEN`/
+`SLACK_WORKER_URL` set simply never matches the Worker-call branch below and keeps today's
+behavior (retry the same token on every technical failure). See
+`work/control-plane-token-switch/user-spec.md` and the separate `control-plane` repo's own
+`worker/src/index.js` for the full contract; this section only covers what the three stages below
+do, entirely in deterministic workflow bash — the agent itself never calls this endpoint and is
+unaware it exists.
+
+**What triggers it.** After every `claude -p` attempt in all three stages
+(`online-pipeline-userspec.yml`, `online-pipeline-implement.yml`,
+`online-pipeline-knowledge-init.yml`), the workflow bash checks the attempt's captured stdout/stderr
+for one of the two fixed, confirmed-real Claude rate-limit strings: `"You've hit your session
+limit"` (5-hour limit) or `"You've hit your weekly limit"` (7-day limit). Only these two fixed
+prefixes are matched — never a guessed variant — so a wording change on GitHub's side simply fails
+to match instead of mis-firing (see Risk 1 in the user-spec). No match: the attempt is handled
+exactly as any other technical failure, unchanged.
+
+**On a match**, the workflow extracts the `"resets {time} ({tz})"` segment from the same output and
+calls `POST $SLACK_WORKER_URL/switch-token/auto` with `X-Relay-Token: $SLACK_RELAY_TOKEN` (the same
+secret already used for `/relay` — no new secret) and body `{owner, repo, rateLimitResetText}`:
+
+- `{ok:true, alias, token}` — the real token for a different pool alias. The workflow uses it as
+  `CLAUDE_CODE_OAUTH_TOKEN` for the *next* attempt only (a job's own env var is fixed for its whole
+  lifetime and never self-refreshes, so every subsequent `claude -p` invocation in the loop is
+  explicitly prefixed with the current value held in a shell variable, not the original secret).
+  The attempt that just rate-limited still counts against the stage's existing `ATTEMPTS=3` budget
+  — auto-switch never raises that cap.
+- `{ok:false, error:"no_alias_available"}` — every pool token is currently rate-limited. The
+  workflow stops immediately instead of burning the remaining attempts on a token known to still be
+  limited: it posts a distinct message via `gh issue comment` + the Slack relay ("Mọi token trong
+  pool đều đang bị rate-limit...") and exits non-zero, separately from the generic "failed after 3
+  attempts" message technical-error exhaustion posts.
+  Any other outcome (network error, timeout, 5xx, or any other `error` value such as
+  `"set_secret_failed"`) is treated the same as "Worker call failed": the attempt falls back to the
+  existing retry-same-token behavior, exactly as if no rate-limit pattern had matched at all.
+
+**Stage-specific notes:**
+
+- `implement`/`implement-resume`/`knowledge-init`: a rate-limited attempt is handled exactly like
+  any other technical failure in that stage's existing loop (reset to the last good state, retry
+  from scratch with the new token) — there is no mid-implementation resume mechanism.
+- `userspec-turn` previously called `claude -p` exactly once per issue comment with no retry loop at
+  all — any technical error failed the whole run immediately. It now has the same
+  `ATTEMPTS=3`-with-reset loop as the other two stages. Because a normal continuing interview turn
+  leaves the status marker at `in_progress` (not a distinct "done" value), the loop treats "posted
+  at least one new issue comment this attempt" as its success signal, on top of `ready_for_review` —
+  only an attempt that posted nothing at all and left the status unchanged counts as a technical
+  failure worth retrying.
+
+**Manual pool management** (`/add-token <alias> <token>`, `/remove-token <alias>`, `/switch-token
+[<alias>]`) is entirely Slack-side, implemented in the `control-plane` repo's Worker — not in this
+skill or these workflows. `/new-project`-bootstrapped repos also get an initial alias from the pool
+at bootstrap time (`bootstrap-project.yml`), falling back to the fixed `control-plane` secret copy
+only when the pool is empty.
+
 ## Stages
 
 ### Stage: userspec-turn
 
 Covers interview, completeness check, draft, and validate — i.e. `user-spec-planning` Steps 1–5.
-Triggered once per issue comment (or once on issue open) by `online-pipeline-userspec.yml`.
+Triggered once per issue comment (or once on issue open) by `online-pipeline-userspec.yml`, which
+retries you up to `ATTEMPTS=3` times on a plain technical failure (see Rate-Limit Auto-Switch
+above) — each retry is a fresh attempt from the same branch state, not a resume of a half-finished
+one.
 
-1. The workflow has already reset the status marker to `in_progress` before invoking you; always
+1. The workflow has already reset the status marker to `in_progress` before invoking you (on every
+   attempt, not just the first); always
    write a final status before exiting, even on a plain interview turn that is neither a stop nor a
    completion (leave it `in_progress` in that case).
 2. If `work/{slug}/user-spec.md` does not exist yet: this is the first run for this issue. Call

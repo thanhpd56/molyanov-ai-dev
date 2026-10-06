@@ -164,6 +164,41 @@ jobs:
                     '{channel_id:$c, thread_ts:$t, text:$x}')" || true
           }
 
+          # Rate-limit auto-switch (control-plane token pool). Reads CLAUDE_OUTPUT_FILE (set by the
+          # caller for the attempt just run). Only the two fixed, confirmed-real prefixes are
+          # matched (Risk 1) — a GitHub wording change or any other error never false-positives
+          # here, and this function then just returns 1 with SWITCH_EXHAUSTED unset, which the
+          # caller treats exactly like any other technical failure (retry-same-token). On success
+          # it updates CURRENT_TOKEN; on {ok:false, error:"no_alias_available"} it sets
+          # SWITCH_EXHAUSTED=true so the caller stops the loop instead of burning the remaining
+          # attempts on a token known to still be rate-limited.
+          try_rate_limit_switch() {
+            if ! grep -qF "You've hit your session limit" "$CLAUDE_OUTPUT_FILE" \
+               && ! grep -qF "You've hit your weekly limit" "$CLAUDE_OUTPUT_FILE"; then
+              return 1
+            fi
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 1
+            fi
+            local reset_text resp ok err
+            reset_text="$(grep -oP "resets .*\)" "$CLAUDE_OUTPUT_FILE" | tail -1 || true)"
+            resp="$(curl -fsS -X POST "$SLACK_WORKER_URL/switch-token/auto" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg o "${GITHUB_REPOSITORY%%/*}" --arg r "${GITHUB_REPOSITORY##*/}" --arg t "$reset_text" \
+                    '{owner:$o, repo:$r, rateLimitResetText:$t}')" 2>/dev/null || true)"
+            ok="$(printf '%s' "$resp" | jq -r '.ok // false' 2>/dev/null || echo false)"
+            if [ "$ok" = "true" ]; then
+              CURRENT_TOKEN="$(printf '%s' "$resp" | jq -r '.token')"
+              echo "Rate limit detected — switched to pool alias $(printf '%s' "$resp" | jq -r '.alias')."
+              return 0
+            fi
+            err="$(printf '%s' "$resp" | jq -r '.error // ""' 2>/dev/null || echo "")"
+            if [ "$err" = "no_alias_available" ]; then
+              SWITCH_EXHAUSTED=true
+            fi
+            return 1
+          }
+
           STAGE_NAME="implement"
           if [ "$ROUTE_ACTION" = "resume" ]; then
             STAGE_NAME="implement-resume"
@@ -173,6 +208,7 @@ jobs:
           LAST_GOOD="$(git rev-parse HEAD)"
           ATTEMPTS=3
           RESULT="technical_error"
+          CURRENT_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
           # Comment count, not status-file state — relaying is about mirroring gh issue comment
           # calls to Slack, independent of why the agent made them. The agent itself never calls
           # relay_to_slack anymore (see SKILL.md, Stage implement/implement-resume step 2) — in
@@ -197,13 +233,15 @@ jobs:
               fi
             } > "$PROMPT_FILE"
 
+            CLAUDE_OUTPUT_FILE="$(mktemp)"
             set +e
             # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
             # (the surrounding shell keeps the real values for the deterministic relay below) —
             # the agent must never self-relay (see SKILL.md), and a prose instruction alone proved
             # insufficient to guarantee that in production: this makes any self-relay attempt a
             # harmless no-op/401 instead of a real duplicate Slack post.
-            SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions
+            CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
+              claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
             set -e
 
             AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
@@ -231,6 +269,12 @@ jobs:
             fi
 
             echo "Technical failure on attempt $ATTEMPT (status: $STATUS)."
+            if try_rate_limit_switch; then
+              : # CURRENT_TOKEN updated above; falls through to the same reset-and-retry below.
+            elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
+              RESULT="rate_limit_pool_exhausted"
+              break
+            fi
             if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
               git push --force origin "$LAST_GOOD:refs/heads/feature/$SLUG"
               git reset --hard "$LAST_GOOD"
@@ -275,6 +319,31 @@ jobs:
                     '{channel_id:$c, thread_ts:$t, text:$x}')" || true
           }
           MESSAGE="Implement job failed after 3 attempts (2 retries). Check the Actions log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
+          relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"
+          exit 1
+
+      - name: Report rate-limit pool exhausted
+        if: env.RESULT == 'rate_limit_pool_exhausted'
+        run: |
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+          MESSAGE="Mọi token trong pool đều đang bị rate-limit, dừng tự động — thêm token mới qua /add-token hoặc đợi reset. Actions log: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
           relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"
           exit 1

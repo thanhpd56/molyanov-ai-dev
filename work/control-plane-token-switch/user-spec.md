@@ -262,6 +262,17 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   rộn của Risk 6. **Mitigation:** chấp nhận, không mitigate cho v1 — ngẫu nhiên hoá không áp dụng
   được cho trường hợp này (không có "nhiều lựa chọn" để rải ra, chỉ có đúng 1 alias cả 2 cùng nhắm
   tới).
+- **Risk 8 (phát hiện lúc review code, sau khi approve spec):** `POST /switch-token/auto` chỉ xác
+  thực bằng `X-Relay-Token`/`SLACK_RELAY_TOKEN` — secret này giống nhau, copy y hệt sang **mọi**
+  repo đã onboard (`bootstrap-project.yml`). Endpoint nhận `{owner, repo}` trực tiếp từ body, không
+  kiểm tra owner/repo đó có đúng là repo "đang gọi" không. Ai có `SLACK_RELAY_TOKEN` của **1** repo
+  bất kỳ (ví dụ lộ qua workflow độc hại ở repo đó) có thể giả `{owner, repo}` của **repo khác** để
+  ép đổi `CLAUDE_CODE_OAUTH_TOKEN` của repo đó sang token họ chọn trong pool — quyền ghi secret
+  GitHub cross-repo mà `/relay` cũ (chỉ đăng Slack/ghi mapping channel) chưa từng cho phép.
+  **Mitigation:** chấp nhận cho v1 — nhất quán với mô hình tin tưởng hiện có của `control-plane`
+  (mọi repo onboard được tin tưởng ngang nhau qua đúng 1 relay token chung, không phát sinh secret
+  mới); không thêm cơ chế xác thực theo-từng-repo (ví dụ OIDC token của GitHub Actions) cho v1 — để
+  lại cho 1 user-spec riêng nếu rủi ro này gây vấn đề thật trong thực tế.
 
 ## Accepted Decisions
 
@@ -302,6 +313,11 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
 - Race condition khi `/add-token` cùng alias mới (Risk 7): chấp nhận là rủi ro hiếm thật (khác
   Risk 6 — không tương quan với kịch bản bận rộn), không mitigate — ngẫu nhiên hoá không áp dụng
   được cho trường hợp chỉ có đúng 1 lựa chọn.
+- `/switch-token/auto` không xác thực `{owner, repo}` trong body khớp với repo đang sở hữu
+  `SLACK_RELAY_TOKEN` gọi tới (Risk 8, phát hiện lúc review code) — chấp nhận cho v1, nhất quán với
+  mô hình "mọi repo onboard tin tưởng ngang nhau qua 1 relay token chung" đã chọn từ đầu cho
+  `/relay`, không thêm xác thực theo-từng-repo (ví dụ OIDC) để tránh phát sinh hạ tầng/secret mới
+  ngoài phạm vi v1.
 
 ## Testing
 
