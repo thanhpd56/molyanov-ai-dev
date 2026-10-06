@@ -132,11 +132,11 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
       zone tên trong chuỗi đó — runtime Workers có đủ dữ liệu ICU, không cần thêm thư viện
       timezone), tra `repo-token:{owner}/{repo}` ra alias hiện tại (nếu có) và đánh dấu
       `token-cooldown:{alias đó}` = giờ reset đã parse.
-    - Chọn 1 alias "khả dụng" (không đang cooldown) khác, theo thứ tự tên alias ổn định (không cần
-      cân bằng tải phức tạp, chưa có yêu cầu đó) — nếu không còn alias khả dụng nào, trả
-      `{ok:false, error:"no_alias_available"}`, không set secret gì cả. Không có cơ chế khoá/claim
-      nào giữa bước đọc và bước ghi — xem Risk 6 về race khi nhiều request chọn gần như đồng thời,
-      chấp nhận là rủi ro hiếm cho v1, không mitigate.
+    - Chọn **ngẫu nhiên** 1 trong các alias "khả dụng" (không đang cooldown) — không theo thứ tự
+      cố định, để nhiều request chọn gần như đồng thời có xu hướng rải ra các alias khác nhau thay
+      vì luôn trúng đúng 1 alias giống nhau (xem Risk 6: giảm xác suất va chạm, không loại bỏ hoàn
+      toàn). Nếu không còn alias khả dụng nào, trả `{ok:false, error:"no_alias_available"}`, không
+      set secret gì cả. Không có cơ chế khoá/claim nào giữa bước đọc và bước ghi.
     - Có alias khả dụng: set secret `CLAUDE_CODE_OAUTH_TOKEN` của repo đó (mục 9), ghi
       `repo-token:{owner}/{repo}` = alias mới, trả `{ok:true, alias, token}` (token thật, không chỉ
       alias — vì job CI cần giá trị ngay cho lượt thử tiếp theo trong CÙNG lần chạy).
@@ -171,6 +171,9 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
 - [ ] Giả lập set secret GitHub thất bại (ví dụ public key fetch lỗi) trong `/switch-token/auto` →
   trả `{ok:false, error:"set_secret_failed"}`, KHÔNG ghi `repo-token` sang alias mới, không báo
   thành công giả.
+- [ ] Giả lập ghi `token-cooldown:{alias}` thất bại (lỗi KV) trong `/switch-token/auto` → không
+  chặn luồng chính, vẫn chọn+set secret alias mới bình thường (fail-open, chỉ mất tối ưu chọn lựa
+  cho lần sau, không làm cả request fail).
 - [ ] 1 alias đang cooldown, sau khi qua đúng giờ reset đã lưu → được chọn lại bình thường ở lần
   auto-switch/`/switch-token` tiếp theo (không bị kẹt "không khả dụng" vĩnh viễn).
 - [ ] `/switch-token` (không alias) → trả lời đúng alias hiện tại của repo + danh sách toàn bộ pool.
@@ -242,18 +245,23 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   token mới vào pool chung (dùng được cho MỌI repo khác, không chỉ repo của channel đó).
   **Mitigation:** chấp nhận theo đúng lựa chọn rõ ràng của người dùng (câu 15 interview); đã có
   lớp chặn riêng cho ghi đè (mục 8) để giảm rủi ro cụ thể nhất (đổi ngầm token đang dùng chung).
-- **Risk 6:** 2+ repo cùng bị rate-limit gần như đồng thời (đúng kịch bản chính feature này nhắm
-  tới) gọi `/switch-token/auto` cùng lúc, hoặc 2 người gọi `/add-token` với alias mới giống nhau
-  gần như đồng thời — Cloudflare KV không có compare-and-swap thật (và là eventually-consistent
-  giữa các edge location, có thể mất tới hàng chục giây để 1 lần ghi hiển thị ở nơi khác — đúng
-  điều kiện mà 2 request CI ở 2 vùng địa lý khác nhau dễ gặp phải), nên bước đọc-rồi-ghi của cả 2
-  endpoint này có thể đọc trùng kết quả: 2 repo cùng chọn trúng 1 alias (dồn lại đúng vấn đề đang
-  muốn tránh), hoặc 2 lần `/add-token` cùng alias ghi đè nhau. **Mitigation:** không có — đã xem
-  xét 1 cơ chế "claim" TTL ngắn trên KV nhưng xác nhận không hiệu quả cho đúng kịch bản chính (TTL
-  tối thiểu bắt buộc của Cloudflare KV là 60s, và việc ghi claim ở 1 vùng không hiển thị kịp ở
-  vùng khác đúng lúc cần). Chấp nhận là rủi ro hiếm cho v1 — giải pháp đúng (Durable Objects, để
-  serialize hoá việc chọn alias thật sự) bị coi là phức tạp hơn mức cần cho v1, để lại cho 1
-  user-spec riêng nếu va chạm này thực sự xảy ra và gây vấn đề thật.
+- **Risk 6:** 2+ repo cùng bị rate-limit gần như đồng thời gọi `/switch-token/auto` cùng lúc —
+  **đây không phải trường hợp hiếm, mà đúng là kịch bản chính feature này nhắm tới** (nhiều repo
+  chia sẻ 1 token, cùng cạn hạn mức cùng lúc). Cloudflare KV không có compare-and-swap thật (và là
+  eventually-consistent giữa các edge location, có thể mất tới hàng chục giây để 1 lần ghi hiển
+  thị ở nơi khác — đúng điều kiện mà 2 request CI ở 2 vùng địa lý khác nhau dễ gặp phải), nên bước
+  đọc-rồi-ghi có thể đọc trùng danh sách "alias khả dụng". **Mitigation:** chọn alias **ngẫu
+  nhiên** trong số khả dụng (mục 10) thay vì theo thứ tự cố định — với N alias khả dụng, 2 request
+  va nhau chỉ còn khoảng 1/N xác suất chọn trúng cùng 1 alias, thay vì chắc chắn trùng như thuật
+  toán thứ-tự-cố-định ban đầu. Không loại bỏ hoàn toàn race (vẫn có xác suất trùng, không có
+  khoá/claim thật), nhưng không cần thêm hạ tầng mới (Durable Objects) cho v1 — để lại cho 1
+  user-spec riêng nếu va chạm xác suất này vẫn gây vấn đề thật trong thực tế.
+- **Risk 7:** 2 người gọi `/add-token` với **cùng 1 alias mới** (chưa tồn tại trong pool) gần như
+  đồng thời — cùng loại race check-rồi-ghi trên KV, nhưng điều kiện xảy ra (2 người độc lập chọn
+  đúng cùng 1 tên alias chưa từng dùng, cùng lúc) thực sự hiếm, không tương quan với kịch bản bận
+  rộn của Risk 6. **Mitigation:** chấp nhận, không mitigate cho v1 — ngẫu nhiên hoá không áp dụng
+  được cho trường hợp này (không có "nhiều lựa chọn" để rải ra, chỉ có đúng 1 alias cả 2 cùng nhắm
+  tới).
 
 ## Accepted Decisions
 
@@ -284,18 +292,25 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   quán với kiến trúc `/relay` đã có.
 - Reset-time parse dùng `Intl.DateTimeFormat` với tên zone bắt được trong chuỗi lỗi thật (`UTC`,
   `Asia/Saigon`) — Workers runtime có đủ dữ liệu ICU, không cần thêm thư viện timezone riêng.
-- Race condition khi nhiều request chọn/thêm alias cùng lúc (Risk 6): chấp nhận là rủi ro hiếm cho
-  v1, không mitigate — 1 cơ chế claim TTL ngắn trên KV đã được xem xét nhưng xác nhận không hiệu
-  quả cho đúng kịch bản chính (ràng buộc TTL tối thiểu 60s của KV, và tính eventually-consistent
-  giữa vùng của Cloudflare KV), và Durable Objects (giải pháp đúng) bị coi là phức tạp hơn mức cần
-  cho v1 — không thêm 1 primitive Cloudflare mới chỉ để loại bỏ hoàn toàn 1 rủi ro va chạm hiếm.
+- Race condition khi chọn alias cho auto-switch (Risk 6) — đây KHÔNG phải rủi ro hiếm, mà tương
+  quan trực tiếp với kịch bản chính feature này nhắm tới (nhiều repo cùng rate-limit). Đã xem xét
+  và loại 2 phương án: claim TTL ngắn trên KV (không hiệu quả — TTL tối thiểu bắt buộc 60s, KV
+  eventually-consistent giữa vùng) và Durable Objects (đúng nhưng phức tạp hơn mức cần cho v1).
+  Chọn **thuật toán chọn alias ngẫu nhiên** thay vì thứ tự cố định — sửa nhỏ, không thêm hạ tầng,
+  giảm xác suất va chạm từ "chắc chắn trùng" xuống "~1/N xác suất trùng" (N = số alias khả dụng).
+  Chấp nhận phần xác suất còn lại cho v1.
+- Race condition khi `/add-token` cùng alias mới (Risk 7): chấp nhận là rủi ro hiếm thật (khác
+  Risk 6 — không tương quan với kịch bản bận rộn), không mitigate — ngẫu nhiên hoá không áp dụng
+  được cho trường hợp chỉ có đúng 1 lựa chọn.
 
 ## Testing
 
 **Unit tests:** cần — mọi logic thuần sống trong `control-plane/worker` có thể test độc lập (parse
-giờ reset + timezone ra timestamp tuyệt đối, logic chọn alias khả dụng/bỏ qua cooldown/phát hiện
-hết pool kể cả nhánh "cooldown hết hạn → khả dụng lại", các KV key builder mới, helper mã hoá
-sealed-box nếu tách được thành hàm thuần) — theo đúng quy ước `worker/src/*.test.js` (vitest) đã
+giờ reset + timezone ra timestamp tuyệt đối, logic chọn alias khả dụng ngẫu nhiên — test rằng kết
+quả luôn thuộc tập khả dụng và không bao giờ là alias đang cooldown, không cần test tính "ngẫu
+nhiên" thật của nó — /bỏ qua cooldown/phát hiện hết pool kể cả nhánh "cooldown hết hạn → khả dụng
+lại", các KV key builder mới, helper mã hoá sealed-box nếu tách được thành hàm thuần) — theo đúng
+quy ước `worker/src/*.test.js` (vitest) đã
 có. `index.js`'s wiring (các handler slash-command mới, endpoint mới) không cần test riêng — đúng
 quy ước sẵn có của file này (business logic sống ở `lib.js`/`github.js` để test được).
 
@@ -318,7 +333,7 @@ việc secret mới thật sự có hiệu lực ở lần chạy CI kế tiếp
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Chạy `npm test` trong `control-plane/worker` sau khi thêm code | Toàn bộ test cũ + mới pass, bao gồm 2 chuỗi mẫu rate-limit thật, logic chọn alias/cooldown, KV key builder mới. |
+| 1. Chạy `npm test` trong `control-plane/worker` sau khi thêm code | Toàn bộ test cũ + mới pass: parse giờ reset + timezone, logic chọn alias/cooldown (gồm nhánh hết hạn → khả dụng lại), KV key builder mới, helper sealed-box nếu tách được thành hàm thuần. (Việc khớp 2 chuỗi mẫu rate-limit KHÔNG nằm trong test này — nó sống trong bash của 3 workflow YAML ở `molyanov-ai-dev`, xem bước 7.) |
 | 2. Đọc lại `online-pipeline-userspec.yml` sau khi sửa | Có retry loop 3 lần mới (trước đây không có), có bước nhận diện rate-limit + gọi Worker trước khi phân loại thành công/thất bại. |
 | 3. Đọc lại `online-pipeline-implement.yml`/`online-pipeline-knowledge-init.yml` sau khi sửa | Loop 3 lần hiện có được thêm bước nhận diện rate-limit + gọi Worker, không đổi cấu trúc reset-on-failure hiện tại; lượt đổi token vẫn tính vào đúng 3 `ATTEMPTS`. |
 | 4. Đọc code mới trong `control-plane/worker/src/index.js`/`github.js`/`lib.js` | 3 slash command mới + endpoint `/switch-token/auto` đúng hành vi đã chốt (không ghi đè alias trùng, không echo token, cooldown chỉ chặn tự chọn không chặn tay). |

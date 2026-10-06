@@ -165,6 +165,18 @@ conversation_history:
       1 chấp nhận. (bỏ claim TTL, document race là rủi ro hiếm chưa mitigate — không xây Durable
       Objects cho v1)
 
+  - asked_at: "2026-10-06 09:00:00"
+    topic_keys: ["risks", "technical_decisions"]
+    agent_questions: |
+      Validation round 3 (adequacy validator) chỉ ra mô tả "hiếm" ở câu trả lời trước là sai: điều
+      kiện gây race (nhiều repo cùng rate-limit) chính là kịch bản chính feature này nhắm tới,
+      không hiếm; và thuật toán chọn alias hiện tại (thứ tự tên cố định) khiến 2 request va nhau
+      CHẮC CHẮN trùng, không phải "có thể". 3 lựa chọn: (1) chỉ sửa lại chữ, vẫn không mitigate;
+      (2) chọn alias ngẫu nhiên thay vì thứ tự cố định (sửa nhỏ, giảm xác suất trùng từ chắc chắn
+      xuống ~1/N); (3) xét lại Durable Objects.
+    user_answer: |
+      Phương án 2. (chọn alias ngẫu nhiên trong số khả dụng, thay vì thứ tự tên cố định)
+
 general_understanding:
   feature_name:
     score: 90
