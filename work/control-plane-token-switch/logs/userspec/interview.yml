@@ -142,6 +142,16 @@ conversation_history:
       Tiếp tục đi. (đồng ý cả 2 đề xuất: 22 reset về $LAST_GOOD như lỗi kỹ thuật thường; 23 báo lỗi,
       không ghi đè alias đã tồn tại)
 
+  - asked_at: "2026-10-06 07:10:00"
+    topic_keys: ["risks", "technical_decisions"]
+    agent_questions: |
+      Validation round 1 (adequacy validator) tìm ra: khi 2+ repo cùng rate-limit gần như đồng
+      thời, 2 request /switch-token/auto có thể cùng chọn trúng 1 alias (KV không có
+      compare-and-swap). 3 lựa chọn: (1) chấp nhận, chỉ document; (2) giảm nhẹ bằng claim TTL ngắn
+      trên KV; (3) Durable Objects (chắc nhất, phức tạp hơn nhiều).
+    user_answer: |
+      2 đi. (claim TTL ngắn trên KV)
+
 general_understanding:
   feature_name:
     score: 90
