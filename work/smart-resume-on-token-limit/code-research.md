@@ -94,6 +94,22 @@ vendor's `.codex` mirror).
   runner entirely, so there is nothing left to resume — confirmed out of scope per interview answer
   to Q1 (batch 1).
 
+- **Cross-token resume (verified empirically, round 3 validation finding):** `try_rate_limit_switch`
+  always swaps `CURRENT_TOKEN` to a *different* pool alias/account before the resume call, so every
+  real activation of this feature resumes a session under a different credential than the one that
+  started it. Inspected the actual local session transcript format directly: a real `.jsonl` file
+  under `~/.claude/projects/<escaped-cwd>/<session-id>.jsonl` on this machine. Top-level keys across
+  200+ lines: `operation, sessionId, timestamp, type, message, cwd, gitBranch, requestId,
+  modelUsage, totalCostUSD, ...` — no `token`, `apiKey`, `oauthToken`, `accountId`, or
+  `organizationId` field anywhere; nested `message` is just `{role, content}` (the plain Anthropic
+  Messages API shape). The session file carries no credential/account binding. This is also
+  architecturally expected: Anthropic's `/v1/messages` API is stateless — every call sends the full
+  `messages` array, and auth is a per-request header, not a server-side session property. `-c`/`-r`
+  therefore work by reading the local transcript and replaying it as a normal new API call
+  authenticated with whatever `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` is set at invocation
+  time — functionally no different from a developer manually resending a message array with a
+  different key. There is no cross-account gate to fail here.
+
 ## Naming collision to resolve in the spec/implementation
 
 The codebase already uses the word **"resume"** for a different, pre-existing mechanism:

@@ -88,6 +88,31 @@ conversation_history:
       hợp phổ biến nhất (1 lần rate-limit, không có lỗi kỹ thuật khác xảy ra sau đó).
     user_answer: |
       B — chấp nhận là limitation, không advance checkpoint.
+
+  - asked_at: "2026-10-06 00:20:00"
+    topic_keys: ["risks", "technical_decisions"]
+    agent_questions: |
+      Validation round 3 (userspec-adequacy-validator): phát hiện feasibility risk lớn nhất của
+      toàn bộ feature — try_rate_limit_switch luôn đổi sang 1 token/account KHÁC trước khi resume,
+      nhưng code-research chỉ xác nhận -c/-p tương thích chung, chưa verify liệu CLI có cho resume
+      session dưới account khác không. Có fallback an toàn sẵn (không regress) nhưng chưa biết
+      feature có "hoạt động thật" không. 2 hướng: (A) chấp nhận là rủi ro chưa verify, approve
+      luôn, verify thật lúc implementation; (B) research kỹ thêm trước khi approve.
+    user_answer: |
+      B — research thêm.
+  - asked_at: "2026-10-06 00:22:00"
+    topic_keys: ["risks"]
+    agent_questions: |
+      (Tiếp theo yêu cầu research ở trên — không phải câu hỏi mới cho user, ghi lại kết quả
+      research) Đọc trực tiếp cấu trúc 1 file session cục bộ thật
+      (~/.claude/projects/<cwd>/<session-id>.jsonl) — không có field token/apiKey/accountId nào;
+      message chỉ có {role, content}. Anthropic Messages API stateless (gửi lại toàn bộ messages
+      mỗi lần, auth theo request, không có session phía server gắn với 1 API key). Kết luận:
+      resume không bị ràng buộc account — rủi ro đã được giải quyết bằng evidence thật, không còn
+      là unverified assumption.
+    user_answer: |
+      (Agent tự research theo yêu cầu B ở trên, không cần hỏi thêm — đã cập nhật Risk 3b trong
+      user-spec.md + code-research.md với evidence thật.)
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]
