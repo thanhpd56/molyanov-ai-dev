@@ -84,6 +84,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The default GITHUB_TOKEN can never push a change under .github/workflows/* —
+          # GitHub hard-blocks that for the Actions-issued token regardless of the permissions:
+          # block above (confirmed in production: a real implementation that legitimately added
+          # a CI workflow file got "refusing to allow a GitHub App to create or update workflow
+          # ... without `workflows` permission" on every push, including this step's own "Open
+          # the code PR" push, which silently swallowed the failure via `|| true` and opened a PR
+          # with none of the actual work). GH_PAT (already used elsewhere in this pipeline, e.g.
+          # the userspec-approve job's PR merge) must carry the `workflow` OAuth scope for this to
+          # work; persisting it here means every later `git push` in this job — the agent's own,
+          # and this workflow's — authenticates with it instead.
+          token: ${{ secrets.GH_PAT }}
 
       - name: Prepare the feature branch
         run: |
