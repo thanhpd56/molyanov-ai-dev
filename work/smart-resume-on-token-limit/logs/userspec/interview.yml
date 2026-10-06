@@ -73,6 +73,21 @@ conversation_history:
       2. đủ rồi
       3. cách (b) — dựng sẵn 1 file output giả
       4. đúng, dùng chung
+
+  - asked_at: "2026-10-06 00:15:00"
+    topic_keys: ["risks", "technical_decisions"]
+    agent_questions: |
+      Validation round 1 (userspec-quality-validator + userspec-adequacy-validator, độc lập, cùng
+      bắt trúng 1 vấn đề): LAST_GOOD/baseline chỉ chốt 1 lần trước loop. Nếu sau 1+ lần
+      rate-limit-resume thành công (đã làm thêm việc thật) mà gặp 1 lỗi kỹ thuật thường (không
+      phải rate-limit) → fallback hiện tại reset về baseline ban đầu, xoá sạch cả phần việc của
+      các lần resume thành công trước đó — mất nhiều hơn cả hành vi cũ, ngược mục tiêu feature.
+      2 hướng: (A) advance checkpoint sau mỗi resume thành công (sửa đúng gốc, nhưng knowledge-init
+      cần thêm cơ chế chốt tạm vì stage đó không commit tới khi thành công); (B) chấp nhận là
+      limitation đã biết cho v1, ghi rõ vào Risks, không advance checkpoint — chỉ bảo vệ trường
+      hợp phổ biến nhất (1 lần rate-limit, không có lỗi kỹ thuật khác xảy ra sau đó).
+    user_answer: |
+      B — chấp nhận là limitation, không advance checkpoint.
 # Entry format:
 # - asked_at: "YYYY-MM-DD HH:MM:SS"
 #   topic_keys: ["user_problem", "success_criteria"]
@@ -258,8 +273,18 @@ user_experience:
     required: false
 
   risks:
-    score: 80
+    score: 85
     value: |
+      - Risk (phát hiện lúc validation round 1, 2 reviewer độc lập cùng bắt trúng): baseline
+        rollback (LAST_GOOD/origin-main) chỉ chốt 1 lần trước loop, không advance sau mỗi
+        rate-limit-resume thành công. Nếu 1+ lần resume thành công (làm thêm việc thật) rồi mới
+        gặp 1 lỗi kỹ thuật thường (không phải rate-limit) → fallback cũ reset về baseline ban đầu,
+        xoá luôn cả phần việc của các lần resume thành công trước đó — compound case này mất
+        NHIỀU HƠN cả hành vi trước feature. Mitigation: CHẤP NHẬN là limitation đã biết cho v1
+        (quyết định rõ của user) — không advance checkpoint (sẽ cần thêm cơ chế chốt tạm riêng
+        cho knowledge-init vì stage đó không commit tới khi thành công, phức tạp hơn mức cần).
+        Feature vẫn bảo vệ đúng trường hợp phổ biến nhất: 1 lần rate-limit giữa lúc code, không
+        có lỗi kỹ thuật khác xảy ra sau đó trong cùng job.
       - Risk: nhầm lẫn với mechanism "resume" có sẵn (ROUTE_ACTION='resume'/stage
         'implement-resume'). Mitigation: dùng thuật ngữ riêng "rate-limit resume" xuyên suốt log/
         SKILL.md/biến bash (đã chốt, xem technical_decisions).

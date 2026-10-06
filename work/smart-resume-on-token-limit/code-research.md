@@ -58,13 +58,18 @@ already-completed `control-plane-token-switch` feature.
 
 ### Tracked copies (must stay in sync — established project convention, not new)
 
-Each of the 3 workflow YAMLs above has exactly 4 tracked copies that must remain byte-identical in
-pairs (source↔vendor, and each mirrored into `.codex/`):
+Each of the 3 workflow YAMLs above has **6** tracked copies, not 4 (corrected after skeptic review
+caught this undercount — verified via `git ls-files` + `diff -q`, all 6 byte-identical):
 
 - `skills/online-pipeline/assets/workflows/{file}.yml` (source)
 - `.codex/skills/online-pipeline/assets/workflows/{file}.yml` (mirror of source)
-- `skills/project-initialization/assets/new-project/.claude/skills/online-pipeline/assets/workflows/{file}.yml` (vendor, byte-for-byte same as source)
-- `.codex/skills/project-initialization/assets/new-project/.claude/skills/online-pipeline/assets/workflows/{file}.yml` (mirror of vendor)
+- `skills/project-initialization/assets/new-project/.claude/skills/online-pipeline/assets/workflows/{file}.yml` (vendor's skill copy, byte-for-byte same as source)
+- `.codex/skills/project-initialization/assets/new-project/.claude/skills/online-pipeline/assets/workflows/{file}.yml` (mirror of the above)
+- `skills/project-initialization/assets/new-project/.github/workflows/{file}.yml` (vendor's **installed** workflow copy — the file that actually runs as GitHub Actions in any scaffolded repo; documented as a required manual sync target in `skills/online-pipeline/SKILL.md`'s "Setup Script Maintenance" section)
+- `.codex/skills/project-initialization/assets/new-project/.github/workflows/{file}.yml` (mirror of the above)
+
+`skills/online-pipeline/SKILL.md` itself genuinely has only 4 tracked copies (source / `.codex`
+mirror / vendor / vendor's `.codex` mirror) — the undercount only affected the 3 workflow YAMLs.
 
 `skills/online-pipeline/SKILL.md` has the same 4-copy pattern (source / `.codex` mirror / vendor /
 vendor's `.codex` mirror).
