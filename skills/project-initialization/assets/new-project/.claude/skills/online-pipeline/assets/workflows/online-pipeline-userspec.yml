@@ -293,6 +293,7 @@ jobs:
           # in_progress, so "did this attempt post anything" is what distinguishes a normal
           # continuing turn from a technical failure that produced nothing.
           BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+          RATE_LIMIT_RESUME_COUNT=0
 
           for ATTEMPT in 1 2 3; do
             echo "userspec-turn attempt $ATTEMPT/$ATTEMPTS"
@@ -317,46 +318,61 @@ jobs:
               echo ""
               echo "ONLINE_PIPELINE_AUTOMATED"
             } > "$PROMPT_FILE"
+            CLAUDE_FLAGS=(-p)
+            CLAUDE_PROMPT_TEXT="$(cat "$PROMPT_FILE")"
 
-            CLAUDE_OUTPUT_FILE="$(mktemp)"
-            set +e
-            # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
-            # (the surrounding shell keeps the real values for the deterministic relay below) — the
-            # agent must never self-relay (see SKILL.md), and a prose instruction alone proved
-            # insufficient to guarantee that in production: this makes any self-relay attempt a
-            # harmless no-op/401 instead of a real duplicate Slack post.
-            CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
-              claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
-            set -e
+            # Inner loop: see online-pipeline-implement.yml's identical inner loop for the full
+            # rationale — a rate-limit mid-attempt swaps CURRENT_TOKEN and continues the exact same
+            # Claude Code session with -c/--continue ("rate-limit resume", see SKILL.md) instead of
+            # falling through to the outer loop's reset-and-retry-from-scratch below. It never
+            # advances ATTEMPT; only a genuine (non-rate-limit) technical failure breaks out.
+            while true; do
+              CLAUDE_OUTPUT_FILE="$(mktemp)"
+              set +e
+              # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
+              # (the surrounding shell keeps the real values for the deterministic relay below) — the
+              # agent must never self-relay (see SKILL.md), and a prose instruction alone proved
+              # insufficient to guarantee that in production: this makes any self-relay attempt a
+              # harmless no-op/401 instead of a real duplicate Slack post.
+              CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
+                claude "${CLAUDE_FLAGS[@]}" "$CLAUDE_PROMPT_TEXT" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
+              set -e
 
-            AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
-            NEW_COMMENTS=$((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT))
-            if [ "$NEW_COMMENTS" -gt 0 ]; then
-              RELAY_COUNT=0
-              while IFS= read -r COMMENT_JSON; do
-                COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
-                relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
-                RELAY_COUNT=$((RELAY_COUNT + 1))
-              done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
-                        | jq -c '.[] | select(.author.login == "github-actions") | .body')
-              echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($NEW_COMMENTS new comment(s) total)."
-            fi
-            BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
+              AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+              NEW_COMMENTS=$((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT))
+              if [ "$NEW_COMMENTS" -gt 0 ]; then
+                RELAY_COUNT=0
+                while IFS= read -r COMMENT_JSON; do
+                  COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+                  relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+                  RELAY_COUNT=$((RELAY_COUNT + 1))
+                done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                          | jq -c '.[] | select(.author.login == "github-actions") | .body')
+                echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($NEW_COMMENTS new comment(s) total)."
+              fi
+              BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
 
-            STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo in_progress)"
+              STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo in_progress)"
 
-            if [ "$STATUS" = "ready_for_review" ] || [ "$NEW_COMMENTS" -gt 0 ]; then
-              RESULT="success"
+              if [ "$STATUS" = "ready_for_review" ] || [ "$NEW_COMMENTS" -gt 0 ]; then
+                RESULT="success"
+                break 2
+              fi
+
+              echo "Technical failure (status: $STATUS, no new comment posted)."
+              if try_rate_limit_switch; then
+                RATE_LIMIT_RESUME_COUNT=$((RATE_LIMIT_RESUME_COUNT + 1))
+                echo "Rate-limit resume #$RATE_LIMIT_RESUME_COUNT — continuing previous session with new token"
+                CLAUDE_FLAGS=(-p -c)
+                CLAUDE_PROMPT_TEXT="Your Claude Code token was refreshed after a rate limit. Continue exactly where you left off on this same task — do not restart from the beginning."
+                continue
+              elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
+                RESULT="rate_limit_pool_exhausted"
+                break 2
+              fi
               break
-            fi
+            done
 
-            echo "Technical failure on attempt $ATTEMPT (status: $STATUS, no new comment posted)."
-            if try_rate_limit_switch; then
-              : # CURRENT_TOKEN updated above; falls through to the same reset-and-retry below.
-            elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
-              RESULT="rate_limit_pool_exhausted"
-              break
-            fi
             if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
               git push --force origin "$LAST_GOOD:refs/heads/$BRANCH"
               git reset --hard "$LAST_GOOD"

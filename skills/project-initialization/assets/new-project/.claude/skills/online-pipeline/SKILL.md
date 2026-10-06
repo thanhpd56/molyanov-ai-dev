@@ -244,11 +244,13 @@ calls `POST $SLACK_WORKER_URL/switch-token/auto` with `X-Relay-Token: $SLACK_REL
 secret already used for `/relay` — no new secret) and body `{owner, repo, rateLimitResetText}`:
 
 - `{ok:true, alias, token}` — the real token for a different pool alias. The workflow uses it as
-  `CLAUDE_CODE_OAUTH_TOKEN` for the *next* attempt only (a job's own env var is fixed for its whole
-  lifetime and never self-refreshes, so every subsequent `claude -p` invocation in the loop is
-  explicitly prefixed with the current value held in a shell variable, not the original secret).
-  The attempt that just rate-limited still counts against the stage's existing `ATTEMPTS=3` budget
-  — auto-switch never raises that cap.
+  `CLAUDE_CODE_OAUTH_TOKEN` for the *next* `claude` call (a job's own env var is fixed for its whole
+  lifetime and never self-refreshes, so every subsequent invocation in the loop is explicitly
+  prefixed with the current value held in a shell variable, not the original secret). That next call
+  is a **rate-limit resume** (see Stage-specific notes below), not a fresh technical-failure retry:
+  it does **not** count against the stage's `ATTEMPTS=3` budget, and none of the stage's reset/clean
+  step runs first — the file edits (and any local commit) from the rate-limited attempt are left
+  exactly as they were.
 - `{ok:false, error:"no_alias_available"}` — every pool token is currently rate-limited. The
   workflow stops immediately instead of burning the remaining attempts on a token known to still be
   limited: it posts a distinct message via `gh issue comment` + the Slack relay ("Mọi token trong
@@ -260,9 +262,29 @@ secret already used for `/relay` — no new secret) and body `{owner, repo, rate
 
 **Stage-specific notes:**
 
-- `implement`/`implement-resume`/`knowledge-init`: a rate-limited attempt is handled exactly like
-  any other technical failure in that stage's existing loop (reset to the last good state, retry
-  from scratch with the new token) — there is no mid-implementation resume mechanism.
+- All three stages (`implement`/`implement-resume`, `knowledge-init`, `userspec-turn`) handle a
+  rate-limited attempt the same way: a **rate-limit resume**. Instead of resetting and retrying from
+  scratch, the workflow re-invokes `claude -p -c`/`--continue` with the new token, in the same
+  working directory, with a short prompt announcing the token refresh instead of the stage's normal
+  prompt — Claude Code's own session continuity (`-c`) picks up the exact same conversation where it
+  left off (see Risk 3/3b in `work/smart-resume-on-token-limit/user-spec.md`: this job's own `claude`
+  process is always the only one active in this working directory, and the local session transcript
+  carries no credential/account binding, so resuming under a different pool token is safe). This
+  loops with no hard cap: every successful switch is one more rate-limit resume, logged as
+  `"Rate-limit resume #N — continuing previous session with new token"` to stay visually distinct
+  from the stage's normal `"... attempt X/3"` log line; it only stops when the Worker reports
+  `SWITCH_EXHAUSTED` (pool exhausted, see above).
+
+  If the `-c` resume call itself fails for a reason **other** than a rate-limit match (e.g. a CLI
+  error, "session not found"), that is a normal technical failure: it falls back to the stage's
+  existing reset-and-retry-from-scratch behavior and counts against `ATTEMPTS=3`, exactly as before
+  this mechanism existed.
+
+  **Known limitation:** the reset baseline (`$LAST_GOOD`/`origin/main`) is captured once before the
+  loop and never advances after a successful rate-limit resume. If one or more resumes succeed and
+  then a later *plain* technical failure resets, the rollback discards the resumed work too, not
+  just the failing attempt's. Accepted for v1 (see Risk 1 in the user-spec) — the common single-
+  rate-limit case is unaffected.
 - `userspec-turn` previously called `claude -p` exactly once per issue comment with no retry loop at
   all — any technical error failed the whole run immediately. It now has the same
   `ATTEMPTS=3`-with-reset loop as the other two stages. Because a normal continuing interview turn
@@ -270,6 +292,15 @@ secret already used for `/relay` — no new secret) and body `{owner, repo, rate
   at least one new issue comment this attempt" as its success signal, on top of `ready_for_review` —
   only an attempt that posted nothing at all and left the status unchanged counts as a technical
   failure worth retrying.
+
+**Rate-limit resume vs. "resume"/`implement-resume`.** These are two unrelated mechanisms that never
+interact, despite both using the word "resume": `implement-resume` (`ROUTE_ACTION == 'resume'`) is a
+brand-new GitHub Actions job/runner, triggered by a human answering a mid-implementation decision
+question via an issue comment — there is no CLI session involved. Rate-limit resume happens entirely
+**within** one already-running job's attempt loop, continuing the same local Claude Code CLI session
+(`-c`/`--continue`) under a new token. A rate-limit mid-session never changes `ROUTE_ACTION` or the
+status marker, and a decision-resume job never has rate-limit session state to continue (it starts
+on a fresh runner with no prior local session).
 
 **Manual pool management** (`/add-token <alias> <token>`, `/remove-token <alias>`, `/switch-token
 [<alias>]`) is entirely Slack-side, implemented in the `control-plane` repo's Worker — not in this

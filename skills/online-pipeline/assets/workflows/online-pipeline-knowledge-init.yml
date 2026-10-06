@@ -142,6 +142,7 @@ jobs:
           ATTEMPTS=3
           RESULT="technical_error"
           CURRENT_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+          RATE_LIMIT_RESUME_COUNT=0
 
           for ATTEMPT in 1 2 3; do
             echo "knowledge-init attempt $ATTEMPT/$ATTEMPTS"
@@ -159,58 +160,73 @@ jobs:
                 echo "$COMMENT_BODY"
               fi
             } > "$PROMPT_FILE"
+            CLAUDE_FLAGS=(-p)
+            CLAUDE_PROMPT_TEXT="$(cat "$PROMPT_FILE")"
 
-            CLAUDE_OUTPUT_FILE="$(mktemp)"
-            set +e
-            # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
-            # (the surrounding shell keeps the real values for the deterministic relay below) —
-            # the agent must never self-relay (see SKILL.md), and a prose instruction alone proved
-            # insufficient to guarantee that in production: this makes any self-relay attempt a
-            # harmless no-op/401 instead of a real duplicate Slack post.
-            CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
-              claude -p "$(cat "$PROMPT_FILE")" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
-            set -e
+            # Inner loop: see online-pipeline-implement.yml's identical inner loop for the full
+            # rationale — a rate-limit mid-attempt swaps CURRENT_TOKEN and continues the exact same
+            # Claude Code session with -c/--continue ("rate-limit resume", see SKILL.md) instead of
+            # falling through to the outer loop's reset-and-retry-from-scratch below. It never
+            # advances ATTEMPT; only a genuine (non-rate-limit) technical failure breaks out.
+            while true; do
+              CLAUDE_OUTPUT_FILE="$(mktemp)"
+              set +e
+              # SLACK_RELAY_TOKEN/SLACK_WORKER_URL deliberately blanked for this child process only
+              # (the surrounding shell keeps the real values for the deterministic relay below) —
+              # the agent must never self-relay (see SKILL.md), and a prose instruction alone proved
+              # insufficient to guarantee that in production: this makes any self-relay attempt a
+              # harmless no-op/401 instead of a real duplicate Slack post.
+              CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
+                claude "${CLAUDE_FLAGS[@]}" "$CLAUDE_PROMPT_TEXT" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
+              set -e
 
-            AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
-            if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
-              # Filtered to this workflow's own gh issue comment calls — always authored as
-              # "github-actions" (confirmed empirically via `gh issue view --json comments`; GitHub
-              # does NOT render this login as "github-actions[bot]" in this API, despite that being
-              # the common display name elsewhere) — never a human's GitHub comment or the Worker's
-              # own mirror of a Slack reply (posted with a real user's GH_PAT), either of which
-              # landing on the issue during this attempt's run window would otherwise get echoed
-              # straight back into the same Slack thread.
-              RELAY_COUNT=0
-              while IFS= read -r COMMENT_JSON; do
-                COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
-                relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
-                RELAY_COUNT=$((RELAY_COUNT + 1))
-              done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
-                        | jq -c '.[] | select(.author.login == "github-actions") | .body')
-              echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
-            fi
-            BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
+              AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+              if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+                # Filtered to this workflow's own gh issue comment calls — always authored as
+                # "github-actions" (confirmed empirically via `gh issue view --json comments`; GitHub
+                # does NOT render this login as "github-actions[bot]" in this API, despite that being
+                # the common display name elsewhere) — never a human's GitHub comment or the Worker's
+                # own mirror of a Slack reply (posted with a real user's GH_PAT), either of which
+                # landing on the issue during this attempt's run window would otherwise get echoed
+                # straight back into the same Slack thread.
+                RELAY_COUNT=0
+                while IFS= read -r COMMENT_JSON; do
+                  COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+                  relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+                  RELAY_COUNT=$((RELAY_COUNT + 1))
+                done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                          | jq -c '.[] | select(.author.login == "github-actions") | .body')
+                echo "Relayed $RELAY_COUNT new bot comment(s) to Slack ($((AFTER_COMMENT_COUNT - BEFORE_COMMENT_COUNT)) new comment(s) total)."
+              fi
+              BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
 
-            git fetch origin main
-            AFTER_SHA="$(git rev-parse origin/main)"
+              git fetch origin main
+              AFTER_SHA="$(git rev-parse origin/main)"
 
-            # The stage's own contract (see skills/online-pipeline/SKILL.md, Stage: knowledge-init)
-            # guarantees every legitimate outcome commits something as its last action — including
-            # the already-complete shortcut, which always refreshes interview.yml's timestamp even
-            # on a repeat hit — so a landed commit is the only signal this loop trusts. It never
-            # trusts issue/comment state, which an attempt can change before crashing.
-            if [ "$AFTER_SHA" != "$BEFORE_SHA" ]; then
-              RESULT="success"
+              # The stage's own contract (see skills/online-pipeline/SKILL.md, Stage: knowledge-init)
+              # guarantees every legitimate outcome commits something as its last action — including
+              # the already-complete shortcut, which always refreshes interview.yml's timestamp even
+              # on a repeat hit — so a landed commit is the only signal this loop trusts. It never
+              # trusts issue/comment state, which an attempt can change before crashing.
+              if [ "$AFTER_SHA" != "$BEFORE_SHA" ]; then
+                RESULT="success"
+                break 2
+              fi
+
+              echo "Technical failure (no commit landed on main)."
+              if try_rate_limit_switch; then
+                RATE_LIMIT_RESUME_COUNT=$((RATE_LIMIT_RESUME_COUNT + 1))
+                echo "Rate-limit resume #$RATE_LIMIT_RESUME_COUNT — continuing previous session with new token"
+                CLAUDE_FLAGS=(-p -c)
+                CLAUDE_PROMPT_TEXT="Your Claude Code token was refreshed after a rate limit. Continue exactly where you left off on this same task — do not restart from the beginning."
+                continue
+              elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
+                RESULT="rate_limit_pool_exhausted"
+                break 2
+              fi
               break
-            fi
+            done
 
-            echo "Technical failure on attempt $ATTEMPT (no commit landed on main)."
-            if try_rate_limit_switch; then
-              : # CURRENT_TOKEN updated above; falls through to the same reset-and-retry below.
-            elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
-              RESULT="rate_limit_pool_exhausted"
-              break
-            fi
             if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
               # main is never reset here: a failure before a commit leaves main untouched, so a
               # fresh checkout is enough — only this job's own local state is discarded.
