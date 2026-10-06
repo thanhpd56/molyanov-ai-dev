@@ -96,8 +96,6 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
    - `token-pool:{alias}` → `{token, addedAt}`.
    - `repo-token:{owner}/{repo}` → `{alias}` (alias hiện tại của repo đó).
    - `token-cooldown:{alias}` → ISO timestamp (vắng/đã qua = khả dụng).
-   - `token-claim:{alias}` → marker ngắn hạn (TTL ~20s qua `expirationTtl` của KV `put`), đánh dấu
-     "đang được 1 request khác chọn", xem mục 10.
 
 8. **3 slash command mới**, dùng chung mức tin tưởng hiện có (ai trong channel đã link cũng gọi
    được, không thêm tầng quyền mới — đúng mô hình `/new-feature` hiện tại):
@@ -134,18 +132,21 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
       zone tên trong chuỗi đó — runtime Workers có đủ dữ liệu ICU, không cần thêm thư viện
       timezone), tra `repo-token:{owner}/{repo}` ra alias hiện tại (nếu có) và đánh dấu
       `token-cooldown:{alias đó}` = giờ reset đã parse.
-    - Chọn 1 alias "khả dụng" (không đang cooldown **và** không đang bị `token-claim` bởi 1 request
-      khác) khác, theo thứ tự tên alias ổn định (không cần cân bằng tải phức tạp, chưa có yêu cầu
-      đó) — nếu không còn alias khả dụng nào, trả `{ok:false, error:"no_alias_available"}`, không
-      set secret gì cả. Ngay khi chọn được, ghi `token-claim:{alias}` (TTL ~20s) **trước** khi set
-      secret, để 1 request khác đọc gần như đồng thời thấy alias đó đã "đang được chọn" và bỏ qua —
-      giảm đáng kể khung thời gian 2 request cùng chọn trúng 1 alias khi nhiều repo rate-limit gần
-      như đồng thời (không loại bỏ hoàn toàn race — KV không có compare-and-swap thật — chỉ thu nhỏ
-      cửa sổ va chạm xuống còn thời gian giữa 2 lần `put`/`get`, xem Risks).
+    - Chọn 1 alias "khả dụng" (không đang cooldown) khác, theo thứ tự tên alias ổn định (không cần
+      cân bằng tải phức tạp, chưa có yêu cầu đó) — nếu không còn alias khả dụng nào, trả
+      `{ok:false, error:"no_alias_available"}`, không set secret gì cả. Không có cơ chế khoá/claim
+      nào giữa bước đọc và bước ghi — xem Risk 6 về race khi nhiều request chọn gần như đồng thời,
+      chấp nhận là rủi ro hiếm cho v1, không mitigate.
     - Có alias khả dụng: set secret `CLAUDE_CODE_OAUTH_TOKEN` của repo đó (mục 9), ghi
       `repo-token:{owner}/{repo}` = alias mới, trả `{ok:true, alias, token}` (token thật, không chỉ
-      alias — vì job CI cần giá trị ngay cho lượt thử tiếp theo trong CÙNG lần chạy). Claim tự hết
-      hạn qua TTL, không cần dọn tay — tự lành cả khi request crash giữa chừng.
+      alias — vì job CI cần giá trị ngay cho lượt thử tiếp theo trong CÙNG lần chạy).
+    - **Nếu set secret GitHub (mục 9) thất bại** (lỗi lấy public key, hoặc `PUT` bị từ chối): KHÔNG
+      ghi `repo-token:{owner}/{repo}` = alias mới, trả `{ok:false, error:"set_secret_failed"}` —
+      không bao giờ trả `{ok:true}` giả khi secret thật chưa đổi (đúng yêu cầu interview: không
+      được âm thầm báo thành công).
+    - **Nếu ghi `token-cooldown:{alias}` thất bại** (lỗi KV): bỏ qua, coi alias đó vẫn khả dụng cho
+      lần chọn kế tiếp — fail-open, không chặn luồng chính vì đây chỉ là tối ưu chọn lựa, không
+      phải nguồn sự thật duy nhất.
     - Không có `rateLimitResetText` (ca bootstrap, hoặc repo chưa có alias nào) — bỏ qua bước đánh
       dấu cooldown, chỉ chọn alias khả dụng + set secret + trả về, dùng chung logic chọn alias với
       ca auto-switch.
@@ -164,8 +165,14 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   đổi.
 - [ ] `/add-token onlyalias` (không có phần token) → báo lỗi cú pháp, không lưu gì.
 - [ ] `/switch-token work2` → secret `CLAUDE_CODE_OAUTH_TOKEN` của repo link với channel đó đổi
-  đúng giá trị token của `work2` (xác minh qua 1 lần `claude -p` thật chạy trên repo đó sau đổi).
+  đúng giá trị token của `work2`, mã hoá đúng sealed-box (xác minh bằng 1 lần `claude -p` thật chạy
+  trên repo đó sau đổi — xác nhận secret mới thật sự có hiệu lực, không chỉ API trả 2xx).
 - [ ] `/switch-token khong-ton-tai` → báo lỗi, secret không đổi.
+- [ ] Giả lập set secret GitHub thất bại (ví dụ public key fetch lỗi) trong `/switch-token/auto` →
+  trả `{ok:false, error:"set_secret_failed"}`, KHÔNG ghi `repo-token` sang alias mới, không báo
+  thành công giả.
+- [ ] 1 alias đang cooldown, sau khi qua đúng giờ reset đã lưu → được chọn lại bình thường ở lần
+  auto-switch/`/switch-token` tiếp theo (không bị kẹt "không khả dụng" vĩnh viễn).
 - [ ] `/switch-token` (không alias) → trả lời đúng alias hiện tại của repo + danh sách toàn bộ pool.
 - [ ] `/remove-token work2` khi đang là alias hiện tại của 1 repo → xoá khỏi pool thành công; secret
   `CLAUDE_CODE_OAUTH_TOKEN` của repo đó KHÔNG đổi ngay; `/switch-token` (status) sau đó cho repo đó
@@ -182,16 +189,15 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
 - [ ] 1 lần `/new-project` thật mới → repo mới được gán 1 alias từ pool (không phải luôn cùng 1
   token cố định như trước), xác nhận qua `repo-token:{owner}/{repo}` trong KV hoặc `/switch-token`
   status ngay sau bootstrap.
-- [ ] Set secret GitHub thật qua API (sealed-box encryption) hoạt động đúng — xác nhận giá trị
-  secret mới thật sự có hiệu lực ở lần `claude -p` kế tiếp (không chỉ API trả 2xx).
 - [ ] 1 chuỗi lỗi output của `claude -p` KHÔNG khớp cả 2 mẫu rate-limit → không gọi Worker, không
   đổi token gì cả; lượt đó retry với đúng token cũ, giống hệt hành vi trước khi có feature này.
 - [ ] Giả lập `POST /switch-token/auto` trả lỗi (timeout/5xx/network error, không phải
   `{ok:false, error:"no_alias_available"}`) → lượt đó rơi về retry-cùng-token như cũ, không làm
   run fail khác hay dừng sớm so với hành vi trước feature này.
-- [ ] `skills/online-pipeline/SKILL.md` (và 2 bản vendor + mirror `.codex/` của nó) được cập nhật
-  mô tả rõ hành vi rate-limit-detection + auto-switch cho cả 3 stage (`userspec-turn`, `implement`,
-  `knowledge-init`).
+- [ ] `skills/online-pipeline/SKILL.md` được cập nhật mô tả rõ hành vi rate-limit-detection +
+  auto-switch cho cả 3 stage (`userspec-turn`, `implement`, `knowledge-init`) — đồng bộ cả 4 file
+  đang track (1 nguồn, 1 bản vendor trong scaffold `project-initialization` giống byte-for-byte
+  bản nguồn, và 2 bản mirror `.codex/` tương ứng của 2 file trên).
 
 ## Constraints
 
@@ -214,11 +220,14 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
 
 ## Risks
 
-- **Risk 1:** Nhận diện sai mẫu lỗi rate-limit (ví dụ copy sai chuỗi, hoặc GitHub trả tên khác đi
-  theo thời gian) khiến auto-switch không bao giờ kích hoạt — đúng loại lỗi đã xảy ra thật trong
-  session này (nhầm `"github-actions[bot]"` với `"github-actions"` ở 1 feature khác). **Mitigation:**
-  chỉ dùng đúng 2 chuỗi đã xác nhận thật từ log production trong interview này, viết unit test khớp
-  chính xác 2 chuỗi đó; không suy đoán biến thể khác chưa có bằng chứng.
+- **Risk 1:** Nhận diện sai mẫu lỗi rate-limit (ví dụ viết sai phần cố định của chuỗi, hoặc GitHub
+  đổi câu chữ theo thời gian) khiến auto-switch không bao giờ kích hoạt — đúng loại lỗi đã xảy ra
+  thật trong session này (nhầm `"github-actions[bot]"` với `"github-actions"` ở 1 feature khác).
+  **Mitigation:** chỉ dùng đúng phần cố định của 2 chuỗi đã xác nhận thật từ log production trong
+  interview này (`"You've hit your session limit"` / `"...weekly limit"`, phần `resets {time}
+  ({tz})` luôn thay đổi — xem Expected Behavior Phần A mục 1), review kỹ bash khớp mẫu này ở
+  Agent Verification (bước 7) vì đây là bash trong workflow YAML, không viết được bằng unit test
+  JS; không suy đoán biến thể khác chưa có bằng chứng.
 - **Risk 2:** Trả token thật (plaintext) qua response HTTP của endpoint mới cho CI job — mặt lộ
   diện mới. **Mitigation:** cùng mức tin tưởng với secret GitHub Actions bản thân nó (vốn cũng
   truyền plaintext tới runner qua kênh riêng của GitHub), truyền qua HTTPS, xác thực bằng đúng
@@ -234,13 +243,17 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   **Mitigation:** chấp nhận theo đúng lựa chọn rõ ràng của người dùng (câu 15 interview); đã có
   lớp chặn riêng cho ghi đè (mục 8) để giảm rủi ro cụ thể nhất (đổi ngầm token đang dùng chung).
 - **Risk 6:** 2+ repo cùng bị rate-limit gần như đồng thời (đúng kịch bản chính feature này nhắm
-  tới) gọi `/switch-token/auto` cùng lúc — Cloudflare KV không có compare-and-swap thật, nên đọc
-  "alias nào khả dụng" của 2 request có thể trùng nhau, dồn 2 repo vào lại đúng 1 token, lặp lại
-  chính vấn đề đang muốn tránh. **Mitigation:** cơ chế claim TTL ngắn (mục 10) — mỗi lần chọn 1
-  alias, ghi `token-claim:{alias}` (TTL ~20s) trước khi set secret, để request đến gần như đồng
-  thời thấy alias đó "đang được chọn" và tự bỏ qua. Thu nhỏ đáng kể cửa sổ va chạm (xuống còn
-  khoảng thời gian giữa 2 lần đọc/ghi KV), không loại bỏ hoàn toàn — chấp nhận rủi ro va chạm còn
-  lại là hiếm cho v1, không xây Durable Objects (phức tạp hơn nhiều, ngoài phạm vi v1).
+  tới) gọi `/switch-token/auto` cùng lúc, hoặc 2 người gọi `/add-token` với alias mới giống nhau
+  gần như đồng thời — Cloudflare KV không có compare-and-swap thật (và là eventually-consistent
+  giữa các edge location, có thể mất tới hàng chục giây để 1 lần ghi hiển thị ở nơi khác — đúng
+  điều kiện mà 2 request CI ở 2 vùng địa lý khác nhau dễ gặp phải), nên bước đọc-rồi-ghi của cả 2
+  endpoint này có thể đọc trùng kết quả: 2 repo cùng chọn trúng 1 alias (dồn lại đúng vấn đề đang
+  muốn tránh), hoặc 2 lần `/add-token` cùng alias ghi đè nhau. **Mitigation:** không có — đã xem
+  xét 1 cơ chế "claim" TTL ngắn trên KV nhưng xác nhận không hiệu quả cho đúng kịch bản chính (TTL
+  tối thiểu bắt buộc của Cloudflare KV là 60s, và việc ghi claim ở 1 vùng không hiển thị kịp ở
+  vùng khác đúng lúc cần). Chấp nhận là rủi ro hiếm cho v1 — giải pháp đúng (Durable Objects, để
+  serialize hoá việc chọn alias thật sự) bị coi là phức tạp hơn mức cần cho v1, để lại cho 1
+  user-spec riêng nếu va chạm này thực sự xảy ra và gây vấn đề thật.
 
 ## Accepted Decisions
 
@@ -271,21 +284,25 @@ hết hạn mức) — áp dụng tương tự ở đây cho secret GitHub Actio
   quán với kiến trúc `/relay` đã có.
 - Reset-time parse dùng `Intl.DateTimeFormat` với tên zone bắt được trong chuỗi lỗi thật (`UTC`,
   `Asia/Saigon`) — Workers runtime có đủ dữ liệu ICU, không cần thêm thư viện timezone riêng.
-- Race condition khi nhiều request chọn alias cùng lúc: dùng claim TTL ngắn trên KV (mục 10) để
-  giảm nhẹ, không dùng Durable Objects — đủ cho v1, không thêm 1 primitive Cloudflare mới chỉ để
-  loại bỏ hoàn toàn 1 rủi ro va chạm hiếm.
+- Race condition khi nhiều request chọn/thêm alias cùng lúc (Risk 6): chấp nhận là rủi ro hiếm cho
+  v1, không mitigate — 1 cơ chế claim TTL ngắn trên KV đã được xem xét nhưng xác nhận không hiệu
+  quả cho đúng kịch bản chính (ràng buộc TTL tối thiểu 60s của KV, và tính eventually-consistent
+  giữa vùng của Cloudflare KV), và Durable Objects (giải pháp đúng) bị coi là phức tạp hơn mức cần
+  cho v1 — không thêm 1 primitive Cloudflare mới chỉ để loại bỏ hoàn toàn 1 rủi ro va chạm hiếm.
 
 ## Testing
 
-**Unit tests:** cần — mọi logic thuần có thể test độc lập (khớp 2 mẫu lỗi rate-limit đúng chuỗi
-thật đã xác nhận **và** 1 chuỗi KHÔNG khớp cả 2 mẫu phải cho kết quả "không khớp" rõ ràng, parse
+**Unit tests:** cần — mọi logic thuần sống trong `control-plane/worker` có thể test độc lập (parse
 giờ reset + timezone ra timestamp tuyệt đối, logic chọn alias khả dụng/bỏ qua cooldown/phát hiện
-hết pool, các KV key builder mới, helper mã hoá sealed-box nếu tách được thành hàm thuần) — theo
-đúng quy ước `worker/src/*.test.js` (vitest) đã có. `index.js`'s wiring (các handler slash-command
-mới, endpoint mới) không cần test riêng — đúng quy ước sẵn có của file này (business logic sống ở
-`lib.js`/`github.js` để test được). Nhánh "gọi Worker thất bại → rơi về retry-cùng-token" sống
-trong bash của 3 workflow YAML (không phải JS của Worker), nên xác nhận bằng đọc lại logic
-(Agent Verification) thay vì unit test riêng.
+hết pool kể cả nhánh "cooldown hết hạn → khả dụng lại", các KV key builder mới, helper mã hoá
+sealed-box nếu tách được thành hàm thuần) — theo đúng quy ước `worker/src/*.test.js` (vitest) đã
+có. `index.js`'s wiring (các handler slash-command mới, endpoint mới) không cần test riêng — đúng
+quy ước sẵn có của file này (business logic sống ở `lib.js`/`github.js` để test được).
+
+Việc khớp 2 mẫu lỗi rate-limit (và nhánh "không khớp → giữ hành vi cũ", "gọi Worker thất bại → rơi
+về retry-cùng-token") sống trong bash của cả 3 workflow YAML ở `molyanov-ai-dev` (xem Expected
+Behavior Phần A mục 1-2), KHÔNG phải JS của Worker — không viết được bằng vitest ở `worker/src/`.
+Xác nhận bằng đọc lại logic (Agent Verification bước 7), không phải unit test.
 
 **Integration tests:** không cần tự động riêng — không có hạ tầng integration-test hiện có cho
 Worker này ngoài unit test + E2E thật; không phát sinh hạ tầng mới ngoài phạm vi.
@@ -308,7 +325,7 @@ việc secret mới thật sự có hiệu lực ở lần chạy CI kế tiếp
 | 5. Đọc `bootstrap-project.yml` sau khi sửa | Gọi đúng endpoint mới để lấy alias ban đầu, có fallback về secret cố định khi pool rỗng. |
 | 6. Kiểm tra cả 3 bản vendor (`.claude/skills/online-pipeline/assets/workflows/`, `.github/workflows/`, mirror `.codex/`) giống nhau | `diff` sạch giữa 3 bản, đúng quy ước đã áp dụng xuyên suốt `online-pipeline`. |
 | 7. Đọc lại bash logic nhận diện rate-limit trong cả 3 workflow | Chuỗi KHÔNG khớp 2 mẫu rate-limit, hoặc lời gọi Worker bị lỗi (không phải phản hồi `no_alias_available`), đều rơi về đúng nhánh retry-cùng-token hiện có — không có đường nào khiến lượt đó fail khác hay dừng sớm hơn hành vi trước feature này. |
-| 8. Đọc lại `skills/online-pipeline/SKILL.md` sau khi sửa | Có mục mô tả rõ hành vi rate-limit-detection + auto-switch cho cả 3 stage (`userspec-turn`, `implement`, `knowledge-init`); cả 2 bản vendor + mirror `.codex/` giống nhau. |
+| 8. Đọc lại `skills/online-pipeline/SKILL.md` sau khi sửa | Có mục mô tả rõ hành vi rate-limit-detection + auto-switch cho cả 3 stage (`userspec-turn`, `implement`, `knowledge-init`); cả 4 file đang track (nguồn, bản vendor, 2 mirror `.codex/`) giống nhau theo đúng cặp (nguồn = mirror của nguồn, vendor = mirror của vendor). |
 
 ### User Verification
 

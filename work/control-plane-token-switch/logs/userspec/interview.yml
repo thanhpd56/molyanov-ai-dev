@@ -152,6 +152,19 @@ conversation_history:
     user_answer: |
       2 đi. (claim TTL ngắn trên KV)
 
+  - asked_at: "2026-10-06 08:15:00"
+    topic_keys: ["risks", "technical_decisions"]
+    agent_questions: |
+      Validation round 2 (adequacy + skeptic) phát hiện claim TTL ngắn (câu trả lời trước) không
+      khả thi: Cloudflare KV bắt buộc expirationTtl tối thiểu 60s (không phải ~20s), và KV là
+      eventually-consistent giữa vùng (ghi ở 1 nơi có thể mất tới hàng chục giây mới thấy ở nơi
+      khác) — đúng kịch bản 2 repo ở 2 vùng cùng rate-limit lại là kịch bản dễ rơi vào 2 vùng khác
+      nhau nhất. Quyết định lại còn 2 lựa chọn thật: (1) bỏ claim TTL, chấp nhận race là rủi ro
+      chưa có mitigation; (2) Durable Objects (cách duy nhất giải quyết đúng, phức tạp hơn nhiều).
+    user_answer: |
+      1 chấp nhận. (bỏ claim TTL, document race là rủi ro hiếm chưa mitigate — không xây Durable
+      Objects cho v1)
+
 general_understanding:
   feature_name:
     score: 90
