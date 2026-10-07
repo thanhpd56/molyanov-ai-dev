@@ -66,7 +66,9 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   `feature/{slug}` hiện có.
 - [ ] AC3: Khi thành công, commit mới được push vào `feature/{slug}`; PR đang mở tự cập nhật, không
   tạo PR thứ hai; 1 comment xác nhận được post lên issue (mirror sang Slack ở repo đã bật Slack
-  bridge).
+  bridge) — post bằng bước bash xác định ngay sau khi xác nhận push thành công (không phải agent tự
+  post trong session của nó), để thu hẹp tối đa khoảng hở có thể bị `cancel-in-progress` huỷ giữa
+  lúc push xong và lúc post comment (xem Risk 4).
 - [ ] AC4: Nếu trong lúc followup, review wave của `code-writing` trả về finding cần quyết định của
   người dùng (`user_decision_required`), xử lý giống implement gốc: ghi `status: awaiting_decision`,
   commit+push, hỏi qua comment, exit 0 — comment tiếp theo được xử lý qua đường `resume` hiện có
@@ -108,6 +110,18 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   followup dùng chung concurrency group với start/resume (xem Accepted Decisions), tại 1 thời điểm
   chỉ có đúng 1 job chạy cho 1 slug — rủi ro chỉ còn ở phạm vi 1 job tự bị huỷ giữa lúc push của
   chính nó, không phải 2 job khác nhau cùng push đè nhau.
+- **Risk 4:** Vì `cancel-in-progress=true` huỷ TOÀN BỘ job đang chạy (không chỉ phần chưa push), 1
+  job followup có thể bị 1 comment follow-up mới hơn huỷ ngay SAU KHI code đã push thành công nhưng
+  TRƯỚC KHI kịp post comment xác nhận (AC3) — vì push và post-comment là 2 bước riêng trong cùng 1
+  session agent. **Mitigation:** Việc post comment xác nhận (AC3) được chuyển ra bước bash xác định
+  (deterministic), ngay sau khi xác nhận push đã thành công — giống cách "Open the code PR" hiện tại
+  là bash thuần, không phải agent tự làm — để thu hẹp tối đa khoảng hở có thể bị huỷ giữa push và
+  comment (còn lại gần như tức thời, không phải cả 1 lượt gọi `claude -p`). Phần rủi ro còn sót (huỷ
+  đúng lúc bash đang chạy, cực hiếm) được chấp nhận vì không mất code: commit đã push thành công
+  trước khi bị huỷ, không bị mất; job follow-up mới hơn (chính là lý do gây huỷ) sẽ tự hoàn thành và
+  post comment xác nhận của riêng nó ngay sau đó, nên người dùng vẫn luôn nhận được phản hồi cuối
+  cùng — chỉ có thể thiếu xác nhận riêng cho đúng yêu cầu đã bị "đè" lên, không phải mất phản hồi
+  hoàn toàn.
 - **Risk 3:** Agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ qua.
   **Mitigation:** Agent vẫn luôn post lại 1 comment trả lời (AC3/AC6), nên người dùng luôn thấy phản
   hồi và có thể yêu cầu lại nếu bị hiểu nhầm.
@@ -131,12 +145,15 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   agent tự quyết định trong stage prompt, không viết filter từ khoá cứng trong bash — nhất quán với
   cách routing trong skill này luôn "dumb"/deterministic, mọi nhận định nội dung nằm trong `claude
   -p`.
-- Không tạo giá trị status marker mới: followup tái dùng đúng 2 giá trị đã có (`in_progress` khi
-  đang chạy — chỉ là bookkeeping local của job đó, không push ngay; `ready_for_pr` khi xong). Vì giá
-  trị trên `origin` chỉ thực sự đổi khi agent tự commit+push lúc kết thúc, origin vẫn hiển thị
-  `ready_for_pr` suốt lúc 1 followup đang chạy — đây chính là cơ chế khiến route job của 1 comment
-  followup thứ 2 vẫn dispatch đúng `action=followup`, cho phép `cancel-in-progress` huỷ job cũ như
-  AC5 yêu cầu (không cần giá trị status mới).
+- Không tạo giá trị status marker mới: followup tái dùng đúng 3 giá trị đã có cho stage implement
+  (`in_progress` khi đang chạy — chỉ là bookkeeping local của job đó, không push ngay; `ready_for_pr`
+  khi xong thành công; `awaiting_decision` khi cần dừng lại hỏi người dùng, xem AC4). Vì giá trị
+  trên `origin` chỉ thực sự đổi khi agent tự commit+push lúc kết thúc (1 trong 2 giá trị terminal
+  `ready_for_pr`/`awaiting_decision`), origin vẫn hiển thị giá trị trước đó (`ready_for_pr`) suốt
+  lúc 1 followup đang chạy, cho đến khi nó tự commit 1 trong 2 giá trị terminal đó — đây chính là cơ
+  chế khiến route job của 1 comment followup thứ 2 (tới trong lúc job đầu chưa commit gì) vẫn
+  dispatch đúng `action=followup`, cho phép `cancel-in-progress` huỷ job cũ như AC5 yêu cầu (không
+  cần giá trị status mới).
 - Post-gate re-check (AC8) kiểm tra cả 2 điều kiện — status vẫn `ready_for_pr` và PR vẫn `OPEN` —
   giống nguyên văn cách resume đã tự re-check `CURRENT_STATUS != "awaiting_decision"` sau khi tới
   lượt chạy (vì snapshot của route job có thể đã cũ nếu job này phải xếp hàng chờ). Cần cả 2 điều
@@ -172,6 +189,8 @@ thật trên GitHub Actions.
 | 1. Review diff của `online-pipeline-implement.yml` (route job + concurrency block dùng chung group, chỉ `cancel-in-progress` khác theo action) và `SKILL.md` (mục Stage: implement followup mới) so với pattern đã có của `implement-resume` | Action `followup` được thêm nhất quán: dispatch condition, prompt framing ("yêu cầu mới" không phải "câu trả lời"), post-gate re-check cả status+PR-open (giống stale-guard của resume) — không có đoạn nào copy nguyên `resume`'s "answer to the question" framing; concurrency group giống `online-pipeline-implement-${slug}` hiện có, không tạo group mới. |
 | 2. Review đồng bộ vendored copies (`skills/project-initialization/assets/new-project/.github/workflows/online-pipeline-implement.yml`, mirror `.codex/`) | Nội dung khớp với bản nguồn trong `skills/online-pipeline/`, theo đúng "Setup Script Maintenance". |
 | 3. Kiểm tra YAML hợp lệ (`actionlint`/`yamllint` nếu có sẵn trong repo, hoặc ít nhất parse YAML) | Không có lỗi cú pháp trong các file workflow đã sửa. |
+| 4. Review hướng dẫn agent trong `SKILL.md` cho đường `awaiting_decision` giữa lúc followup (AC4) | Hướng dẫn rõ: followup dừng lại, ghi `awaiting_decision`, commit+push, hỏi qua comment, exit — comment tiếp theo đi qua đúng đường `resume` sẵn có, không có đoạn nào coi nó là 1 followup request khác. |
+| 5. Review hướng dẫn agent cho đường "comment không phải yêu cầu đổi code" (AC6) | Hướng dẫn rõ: agent tự nhận định, nếu không phải yêu cầu thật thì chỉ trả lời ngắn, không chạy code-writing, không đổi status. |
 
 ### User Verification
 - Dry-run thực tế trên 1 repo đã bật online-pipeline + Slack bridge (do route job/concurrency/push
@@ -181,3 +200,10 @@ thật trên GitHub Actions.
   trước đang chạy → xác nhận job cũ bị huỷ và job mới chạy theo yêu cầu mới nhất, (d) comment sau khi
   merge không kích hoạt gì. Cần verify thủ công vì đây là hành vi thời gian thực của GitHub Actions
   concurrency + Slack relay, không tái tạo được trong môi trường local.
+- Thêm 2 case cần verify thủ công cùng đợt dry-run trên (không verify được bằng review tĩnh, vì phụ
+  thuộc vào nhận định sống của agent trong lúc chạy `claude -p`):
+  (e) comment follow-up yêu cầu 1 thay đổi mà code-writing cần hỏi lại (ví dụ cố tình đưa ra yêu cầu
+  mơ hồ về kỹ thuật) → xác nhận pipeline dừng, hỏi qua comment, giữ `awaiting_decision`, và trả lời
+  câu hỏi đó tiếp tục đúng qua đường resume (AC4);
+  (f) comment chỉ mang tính xã giao (ví dụ "ok cảm ơn") → xác nhận agent trả lời ngắn, không có
+  commit mới, status vẫn `ready_for_pr` (AC6).
