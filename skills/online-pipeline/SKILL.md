@@ -44,10 +44,11 @@ scheme:
   `status: {value}`. Values: `in_progress` (default — overwritten to this before every run, so a
   crash leaves no stale success signal), `awaiting_decision` (stopped for a user decision),
   `ready_for_review` (userspec stage only — validation clean, spec PR should be opened/updated),
-  `ready_for_pr` (implement stage only — implementation complete, code PR should be opened).
+  `ready_for_pr` (implement stage only — implementation complete; code PR opened on first success,
+  or updated in place on a later `implement-followup` round, see Stages below).
 - Automation signal: the literal string `ONLINE_PIPELINE_AUTOMATED`, included in every
   `userspec-turn` and `finalize` prompt (the two stages that call a modified skill). Not needed for
-  `implement`/`implement-resume` — `code-writing` does not check for it.
+  `implement`/`implement-resume`/`implement-followup` — `code-writing` does not check for it.
 - Local-placeholder label: `local-placeholder`, applied only to the GitHub issue (never a PR) for a
   feature currently being worked on locally. Created defensively wherever it's used, exactly like
   `userspec-spec`/`userspec-implement`. Removed early in every switch-to-online procedure, right
@@ -56,7 +57,8 @@ scheme:
   see Hybrid Local/Online Switch below.
 - Switch handoff comment: the literal string `/switch-online`, posted on the issue by a local
   switch-to-online action. Distinct from `ONLINE_PIPELINE_AUTOMATED` above (that signal only ever
-  appears inside `userspec-turn` and `finalize` prompts, never `implement`/`implement-resume`);
+  appears inside `userspec-turn` and `finalize` prompts, never `implement`/`implement-resume`/
+  `implement-followup`);
   `/switch-online` is read by the `userspec-turn` and `implement-resume` stage prompts themselves,
   not by any route job — route jobs never need to read comment content to dispatch correctly.
 - `knowledge-init` label: applied only to the GitHub issue (never a PR) that drives Stage:
@@ -163,7 +165,7 @@ relay_to_slack() {
 `setup-online-pipeline.sh`; every workflow job that runs `claude -p` exports them.
 
 No stage prompt in this file ever calls `relay_to_slack` itself — every one of them (`userspec-turn`,
-`implement`/`implement-resume`, `knowledge-init`) originally did, by reproducing this bash block via
+`implement`/`implement-resume`/`implement-followup`, `knowledge-init`) originally did, by reproducing this bash block via
 its own tool calls on every turn, but in production this proved unreliable: the agent would
 sometimes post the `gh issue comment` and commit, but skip the relay call, so the message landed on
 GitHub and never reached Slack. Every one of these call sites was moved into deterministic workflow
@@ -195,7 +197,11 @@ the same Slack thread.
   deterministic bash and is unaffected by this change.
 - `online-pipeline-implement.yml`'s "Implement with retry" step, after every `claude -p` attempt
   (`awaiting_decision` question or finding), and its "Report technical failure" step after 3 failed
-  attempts — the latter already ran as deterministic bash and is unaffected.
+  attempts — the latter already ran as deterministic bash and is unaffected. Its "Push followup
+  commit and confirm" step (`implement-followup` only, see Stages below) relays its own
+  confirmation comment the same deterministic way, directly — that comment is posted after
+  "Implement with retry" already exited, so it falls outside that step's own before/after
+  comment-count diffing and needs its own `relay_to_slack` call.
 - `online-pipeline-knowledge-init.yml`'s "Run knowledge-init turn with retry" step, after every
   `claude -p` attempt, and its "Report technical failure" step after 3 failed attempts — the
   latter already ran as deterministic bash and is unaffected.
@@ -262,7 +268,8 @@ secret already used for `/relay` — no new secret) and body `{owner, repo, rate
 
 **Stage-specific notes:**
 
-- All three stages (`implement`/`implement-resume`, `knowledge-init`, `userspec-turn`) handle a
+- All three stages (`implement`/`implement-resume`/`implement-followup`, `knowledge-init`,
+  `userspec-turn`) handle a
   rate-limited attempt the same way: a **rate-limit resume**. Instead of resetting and retrying from
   scratch, the workflow re-invokes `claude -p -c`/`--continue` with the new token, in the same
   working directory, with a short prompt announcing the token refresh instead of the stage's normal
@@ -300,7 +307,9 @@ question via an issue comment — there is no CLI session involved. Rate-limit r
 **within** one already-running job's attempt loop, continuing the same local Claude Code CLI session
 (`-c`/`--continue`) under a new token. A rate-limit mid-session never changes `ROUTE_ACTION` or the
 status marker, and a decision-resume job never has rate-limit session state to continue (it starts
-on a fresh runner with no prior local session).
+on a fresh runner with no prior local session). `implement-followup` (`ROUTE_ACTION == 'followup'`)
+is a third, equally unrelated mechanism: a brand-new job dispatched by a new change request on an
+already-open PR, not a continuation of any stopped session either.
 
 **Manual pool management** (`/add-token <alias> <token>`, `/remove-token <alias>`, `/switch-token
 [<alias>]`) is entirely Slack-side, implemented in the `control-plane` repo's Worker — not in this
@@ -395,6 +404,40 @@ switch action. Run this the same as step 1 of stage `implement` instead: read th
 `work/{slug}/user-spec.md` and `decisions.md` and continue implementing with `code-writing` against
 the branch's current code (the local work already pushed to it) — do not treat the comment as an
 answer to a question that was never asked.
+
+### Stage: implement-followup
+
+Triggered by a new issue comment while `feature/{slug}`'s code PR is still `OPEN` and the status
+marker already reads `ready_for_pr` — the normal "implementation already finished, PR open" state.
+The route job tells this apart from `implement-resume` purely from the status marker value (see
+Naming Contract): `awaiting_decision` dispatches `implement-resume` (an answer to a question this
+pipeline itself asked); `ready_for_pr` with the PR still open dispatches this stage instead (a new,
+unprompted request from the user).
+
+1. Decide first whether the latest issue comment is a genuine request for a code change, or just an
+   acknowledgement/closing remark with nothing to act on (e.g. "ok cảm ơn"). If it is **not** a real
+   change request: post a short reply with `gh issue comment {issue_number}` and stop there — do
+   not run `code-writing`, do not commit anything. The workflow already overwrote the local copy of
+   `work/{slug}/logs/working/online-pipeline-status.yml` to `in_progress` before this run started
+   (its "Prepare the feature branch" step, same bookkeeping every `implement`/`implement-resume` run
+   gets); write `ready_for_pr` back into that local file before exiting so the workflow reads this
+   run as a normal stop rather than a technical failure — but do **not** commit or push it: `origin`
+   already holds `ready_for_pr` from before this run (that is exactly why this stage was dispatched
+   in the first place), so there is nothing new to persist.
+2. Otherwise, treat the comment as a brand-new code-change request against the existing
+   `feature/{slug}` branch and its current code — never as an answer to a previously asked
+   question, even if an earlier `awaiting_decision` round happened at some point in this feature's
+   history. Run `code-writing`'s normal process (including its review waves), exactly as stage
+   `implement` does in its step 1.
+3. The same three exit outcomes as stage `implement` (steps 2–4) apply unchanged: a review-wave
+   finding with `user_decision_required: true` writes `status: awaiting_decision`, commits, pushes,
+   and asks via comment exactly like step 2 there (the next comment then goes through
+   `implement-resume`, not another `implement-followup` round); successful completion writes
+   `status: ready_for_pr`, commits all remaining work, and pushes exactly like step 3 there — do
+   **not** post a confirmation comment yourself here; the workflow's own "Push followup commit and
+   confirm" step posts it, only after verifying your push actually landed on `origin` (see
+   `online-pipeline-implement.yml`); any other exit is a technical failure retried by the workflow
+   exactly like step 4 there.
 
 ### Stage: finalize
 
@@ -534,8 +577,9 @@ Determine which case applies from the feature's current local state, then follow
    2. Read the current status marker if `feature/{slug}` already exists online. Unless it already
       reads exactly `status: awaiting_decision`, write `status: awaiting_decision` to
       `work/{slug}/logs/working/online-pipeline-status.yml` — the value
-      `online-pipeline-implement.yml`'s route job checks for (`grep -q '^status:
-      awaiting_decision'`) to dispatch `implement-resume` — and commit it together with the current
+      `online-pipeline-implement.yml`'s route job compares the status marker against to dispatch
+      `implement-resume` (as opposed to `implement-followup`, which it dispatches instead when the
+      marker reads `ready_for_pr` with the PR still open — see Stages below) — and commit it together with the current
       code state. Dispatch depends on exactly this value every time this case runs, not only the
       first; leaving a stale `ready_for_pr`/`in_progress`/other value in place would make the route
       job silently `action=skip` with no error shown anywhere. If it already reads

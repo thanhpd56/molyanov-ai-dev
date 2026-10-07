@@ -37,6 +37,7 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -58,19 +59,32 @@ jobs:
           fi
           git fetch origin "feature/$SLUG"
           git checkout "feature/$SLUG"
-          if [ -f "work/$SLUG/logs/working/online-pipeline-status.yml" ] && grep -q '^status: awaiting_decision' "work/$SLUG/logs/working/online-pipeline-status.yml"; then
+
+          STATUS_FILE="work/$SLUG/logs/working/online-pipeline-status.yml"
+          CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
+
+          if [ "$CURRENT_STATUS" = "awaiting_decision" ]; then
             echo "action=resume" >> "$GITHUB_OUTPUT"
+          elif [ "$CURRENT_STATUS" = "ready_for_pr" ] && [ -n "$(gh pr list --head "feature/$SLUG" --state open --json number -q '.[0].number' 2>/dev/null || true)" ]; then
+            # Code PR still OPEN and implementation already finished once — this comment is a new
+            # change request on top of it, not an answer to a question (that's "resume" above).
+            # Once the code PR merges (finalize runs), gh pr list --state open stops matching here,
+            # so a late comment correctly falls through to "skip" below (AC7) instead of reopening.
+            echo "action=followup" >> "$GITHUB_OUTPUT"
           else
             echo "action=skip" >> "$GITHUB_OUTPUT"
           fi
 
   implement:
     needs: route
-    if: needs.route.outputs.action == 'start' || needs.route.outputs.action == 'resume'
+    if: needs.route.outputs.action == 'start' || needs.route.outputs.action == 'resume' || needs.route.outputs.action == 'followup'
     runs-on: ubuntu-latest
     concurrency:
       group: online-pipeline-implement-${{ needs.route.outputs.slug }}
-      cancel-in-progress: false
+      # A new followup comment should pre-empt whatever else is running/queued for this slug
+      # (start/resume/an earlier followup) to prioritize the latest request (AC5); start/resume
+      # keep queuing as before — unchanged for those two actions.
+      cancel-in-progress: ${{ needs.route.outputs.action == 'followup' }}
     env:
       SLUG: ${{ needs.route.outputs.slug }}
       ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
@@ -118,6 +132,20 @@ jobs:
             CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
             if [ "$CURRENT_STATUS" != "awaiting_decision" ]; then
               echo "Resume request is stale (branch status is now '$CURRENT_STATUS', not awaiting_decision) — a prior queued run for this feature already handled it. Skipping."
+              echo "STALE=true" >> "$GITHUB_ENV"
+            fi
+          elif [ "$ROUTE_ACTION" = "followup" ]; then
+            # Same staleness problem as resume above, plus a second one specific to followup: by
+            # the time this job gets its turn in the shared concurrency group, a run that was ahead
+            # of it may have already committed a newer terminal status (ready_for_pr/
+            # awaiting_decision from its own followup or decision), or the PR may have merged while
+            # this job waited (finalize never touches this branch's status marker, so only the
+            # PR-open check catches that). Re-check both post-gate (AC8) and skip rather than act on
+            # stale data.
+            CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
+            EXISTING_PR="$(gh pr list --head "feature/$SLUG" --state open --json number -q '.[0].number' 2>/dev/null || true)"
+            if [ "$CURRENT_STATUS" != "ready_for_pr" ] || [ -z "$EXISTING_PR" ]; then
+              echo "Followup request is stale (branch status is now '$CURRENT_STATUS', PR open: $([ -n "$EXISTING_PR" ] && echo yes || echo no)) — a newer run already handled this feature, or its PR merged while this job waited. Skipping."
               echo "STALE=true" >> "$GITHUB_ENV"
             fi
           fi
@@ -209,6 +237,8 @@ jobs:
           STAGE_NAME="implement"
           if [ "$ROUTE_ACTION" = "resume" ]; then
             STAGE_NAME="implement-resume"
+          elif [ "$ROUTE_ACTION" = "followup" ]; then
+            STAGE_NAME="implement-followup"
           fi
 
           STATUS_FILE="work/$SLUG/logs/working/online-pipeline-status.yml"
@@ -237,6 +267,10 @@ jobs:
               if [ "$STAGE_NAME" = "implement-resume" ]; then
                 echo ""
                 echo "Latest issue comment (answer to the question you asked last time):"
+                echo "$COMMENT_BODY"
+              elif [ "$STAGE_NAME" = "implement-followup" ]; then
+                echo ""
+                echo "Latest issue comment (a NEW code-change request on the already-open PR — not an answer to a prior question):"
                 echo "$COMMENT_BODY"
               fi
             } > "$PROMPT_FILE"
@@ -308,9 +342,15 @@ jobs:
           done
 
           echo "RESULT=$RESULT" >> "$GITHUB_ENV"
+          # Baseline commit this job started from (never reassigned above, even across retries —
+          # a reset-and-retry force-pushes back to this exact same SHA). "Push followup commit and
+          # confirm" below uses it to tell a real code change apart from the AC6 case (comment
+          # wasn't a real request, agent replied directly and made no commit) without needing a new
+          # status-marker value.
+          echo "FOLLOWUP_BASELINE_SHA=$LAST_GOOD" >> "$GITHUB_ENV"
 
       - name: Open the code PR
-        if: env.RESULT == 'success'
+        if: env.RESULT == 'success' && needs.route.outputs.action != 'followup'
         run: |
           set -euo pipefail
           git push origin "HEAD:refs/heads/feature/$SLUG" || true
@@ -321,6 +361,52 @@ jobs:
               --title "feature: $SLUG" \
               --body "Auto-generated by online-pipeline from work/$SLUG/user-spec.md. Review and merge to trigger finalize." \
               --label userspec-implement
+          fi
+
+      - name: Push followup commit and confirm
+        if: env.RESULT == 'success' && needs.route.outputs.action == 'followup'
+        run: |
+          set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
+          if [ "$(git rev-parse HEAD)" = "$FOLLOWUP_BASELINE_SHA" ]; then
+            # Agent decided the comment wasn't a real code-change request (AC6) and made no commit
+            # — it already posted its own short reply comment directly, status stayed ready_for_pr.
+            # Nothing to push and no generic "PR updated" confirmation to post here.
+            echo "No new commit from this followup run — comment was not a real change request (AC6). Skipping push and confirmation."
+            exit 0
+          fi
+
+          # Deliberately not `|| true` here (unlike "Open the code PR" above, where that pattern is
+          # safe only because the agent already pushed its own commit and this redundant push is
+          # expected to be a no-op): the confirmation comment below must be posted only when the
+          # push genuinely landed on origin (AC3). A real push failure here is a technical error,
+          # not a signal to post a false confirmation — report it the same way the existing
+          # ATTEMPTS-retry failure path does (see "Report technical failure" below) instead.
+          if git push origin "HEAD:refs/heads/feature/$SLUG"; then
+            MESSAGE="Đã cập nhật PR feature/$SLUG theo yêu cầu follow-up mới nhất."
+            gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
+            relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"
+          else
+            echo "Followup push failed — treating as a technical error, not posting a confirmation comment."
+            echo "RESULT=technical_error" >> "$GITHUB_ENV"
           fi
 
       - name: Report technical failure
