@@ -1,0 +1,400 @@
+# User-spec planning interview
+# Questions and answers are preserved verbatim. Topic fields track what is known and still open.
+
+interview_metadata:
+  started: "2026-10-06 22:48:13"
+  last_updated: "2026-10-07 09:20:00"
+  status: "in_progress"  # in_progress | completed
+  can_resume: true
+
+# Only written/read when the calling context carries the literal signal ONLINE_PIPELINE_AUTOMATED
+# (see user-spec-planning/SKILL.md Step 5). Ignored otherwise; stays null for interactive use.
+automated_validate_state: null
+# automated_validate_state:
+#   round: 2
+#   pending_finding: |
+#     Full finding text from the reviewer that returned user_decision_required.
+#   user_answer: ""  # filled in once the user replies; triggers a re-run of round 2 (not round 1)
+
+conversation_history:
+  - asked_at: "2026-10-06 22:48:13"
+    topic_keys: ["feature_description", "user_problem", "work_type"]
+    agent_questions: |
+      (Initial request, not a question batch) User asked to plan a new feature: after code is done
+      and the MR/PR is created, it should still be possible to keep chatting (request more changes,
+      edits, optimizations) the same way as chatting directly with Claude — because today, chatting
+      more in Slack after the MR is created does not trigger anything further in the pipeline.
+    user_answer: |
+      Let plan new feature::bước implementation, sau khi code xong tạo mr thì vẫn có thể chat tiếp
+      để yêu cầu thêm, chỉnh sửa, tối ưu (giống kiểu tôi đang chat với bạn ntn). Vì flow hiện tại thì
+      sau khi code xong, tạo mr thì chat thêm vào slack không thấy chạy thêm gì.
+  - asked_at: "2026-10-06 22:52:00"
+    topic_keys: ["constraints", "integration_points", "technical_decisions"]
+    agent_questions: |
+      1. Xác nhận phạm vi: feature này chỉ áp dụng cho giai đoạn implement (code PR feature/{slug}),
+         từ lúc PR được tạo (status: ready_for_pr) cho đến khi PR đó được merge. Sau khi đã merge
+         (finalize xong, issue coi như đóng), nếu có comment muộn thì bỏ qua (giống hành vi skip
+         hiện tại) — đúng không, hay bạn muốn hỗ trợ cả trường hợp "feature đã xong rồi, giờ muốn
+         sửa thêm" luôn mở lại pipeline?
+      2. Khi có comment yêu cầu thêm/sửa/tối ưu lúc PR code đang mở: muốn xử lý đúng như lần
+         implement đầu — chạy lại toàn bộ code-writing (bao gồm review waves) trên nhánh
+         feature/{slug} hiện tại, rồi push thêm commit vào PR đang mở đó (không tạo PR mới) — đúng
+         ý bạn không?
+      3. Nếu trong lúc đang xử lý 1 yêu cầu follow-up (job đang chạy) mà có thêm 1 comment follow-up
+         khác tới — xếp hàng chờ (giống cách awaiting_decision/resume đang làm hiện tại, nhờ
+         concurrency group) có ổn không, hay bạn cần hành vi khác (ví dụ huỷ job đang chạy để làm
+         theo yêu cầu mới nhất)?
+      4. Có cần giới hạn số lần "chat tiếp" này không (ví dụ tối đa N lần mỗi PR), hay để vô hạn,
+         chỉ dừng khi PR merge?
+    user_answer: |
+      1. feature này áp dụng từ lúc code PR (feature/{slug}) được tạo (status: ready_for_pr) cho
+         đến khi PR đó merge.
+      2. ý là sau khi code xong, tôi thấy có gì đó chưa hợp lý thì comment thêm để update lại code
+         của mr
+      3. huỷ job đang chạy để làm theo yêu cầu mới nhất
+      4. không giới hạn, cho đến lúc approve merge code.
+  - asked_at: "2026-10-06 22:58:00"
+    topic_keys: ["acceptance_criteria", "error_scenarios", "verification_strategy", "risks"]
+    agent_questions: |
+      1. Sau khi follow-up áp dụng xong (đã push commit mới vào PR đang mở), có cần post 1 comment
+         xác nhận lên issue (ví dụ "Đã cập nhật PR theo yêu cầu") để bạn biết là xong, hay im lặng
+         là đủ (chỉ cần tự xem commit mới trên PR)?
+      2. Nếu trong lúc xử lý follow-up, code-writing phát hiện 1 vấn đề cần bạn quyết định
+         (user_decision_required) — xử lý giống implement ban đầu: dừng lại, hỏi qua comment, chờ
+         bạn trả lời rồi tiếp tục (status awaiting_decision) — đúng không?
+      3. Mọi comment trên issue trong lúc PR code đang mở sẽ được coi là 1 yêu cầu code mới (chạy
+         lại toàn bộ code-writing, tốn CI/token) — kể cả 1 câu như "ok cảm ơn", hay thảo luận không
+         liên quan đến code? Hay cần cách nào để bỏ qua các comment không phải là yêu cầu thay đổi
+         thực sự?
+      4. Đây là logic CI/workflow (route job + SKILL.md), không có unit test. Bạn muốn verify bằng
+         cách nào: review kỹ file YAML + SKILL.md thay đổi, hay cần dry-run thực tế trên 1 repo đã
+         bật online-pipeline + Slack bridge?
+    user_answer: |
+      1. có chứ.
+      2. đúng
+      3. nếu bạn detect được thì càng tôi. Nói chung tôi muốn nó giống 1 cuộc hội thoại liên tục
+         giữa tôi và bot để hoàn thiện mr, cho đến lúc đúng ý muốn và duyệt
+      4. tuỳ bạn.
+
+general_understanding:
+  feature_name:
+    score: 90
+    value: "online-pipeline-implement-followup — cho phép chat tiếp (yêu cầu thêm/sửa/tối ưu) với code PR sau khi implement xong, trong lúc PR còn mở."
+    gaps: []
+    required: true
+
+  feature_description:
+    score: 85
+    value: |
+      Trong stage "implement" của online-pipeline, sau khi code-writing hoàn tất và code PR
+      (feature/{slug}) đã được mở (status: ready_for_pr), mọi issue comment sau đó hiện bị route
+      job bỏ qua (action=skip) — chỉ có awaiting_decision mới được xử lý (action=resume). Cần thêm
+      một action mới (ví dụ "followup") để: khi status==ready_for_pr và code PR vẫn đang mở, một
+      issue comment mới được coi là yêu cầu thay đổi code mới, chạy lại code-writing trên nhánh
+      feature/{slug} hiện có, và push thêm commit vào đúng PR đang mở (không tạo PR mới). Nếu một
+      follow-up đang chạy mà có comment follow-up khác tới, job đang chạy bị huỷ để xử lý theo yêu
+      cầu mới nhất. Không giới hạn số lần, chỉ dừng khi PR được merge.
+    gaps: []
+    required: true
+
+  work_type:
+    score: 100
+    value: "feature"
+    gaps: []
+    required: true
+
+  user_problem:
+    score: 90
+    value: |
+      Hiện tại, sau khi tạo PR code xong, chat thêm vào Slack (tương đương comment trên issue)
+      không kích hoạt gì cả — người dùng không thể yêu cầu sửa/tối ưu tiếp giống như đang chat trực
+      tiếp với Claude. Trong khi đó, stage userspec đã hỗ trợ việc này (comment sau khi spec PR mở
+      vẫn tiếp tục chạy userspec-turn), nên thiếu đối xứng giữa hai stage, và trải nghiệm không
+      liền mạch — phải chờ PR merge xong, hoặc chỉnh tay trên GitHub, mới sửa được.
+    gaps: []
+    required: true
+
+  target_users:
+    score: 80
+    value: "Người dùng online-pipeline đang review 1 code PR được tự động sinh ra (qua GitHub issue comment hoặc Slack thread)."
+    gaps: []
+    required: false
+
+  success_criteria:
+    score: 90
+    value: |
+      Trong lúc code PR (feature/{slug}) đang mở, một comment mới trên issue (kể cả relay từ Slack)
+      yêu cầu sửa/thêm/tối ưu sẽ khiến pipeline tự chạy lại code-writing trên cùng nhánh, push commit
+      mới vào đúng PR đó, và báo lại qua comment khi xong — lặp lại được nhiều lần liên tiếp, giống
+      1 cuộc hội thoại liên tục, cho đến khi người dùng merge PR. Sau khi merge, comment muộn không
+      kích hoạt lại gì cả.
+    gaps: []
+    required: true
+
+  constraints:
+    score: 90
+    value: |
+      - Chỉ hoạt động trong khoảng status==ready_for_pr và code PR còn OPEN (chưa merge); không
+        reopen sau khi đã merge/finalize.
+      - Giữ nguyên kênh giao tiếp hiện có (issue comment, được Slack relay mirror vào) — không thêm
+        cơ chế lắng nghe comment trực tiếp trên PR.
+      - Tái dùng code-writing skill nguyên trạng; không viết lại logic implement hiện có.
+      - Không giới hạn số lượt follow-up (theo quyết định của người dùng).
+      - Nếu 1 follow-up đang chạy mà có follow-up mới tới, job cũ bị huỷ (cancel-in-progress) để ưu
+        tiên yêu cầu mới nhất — chấp nhận việc yêu cầu cũ bị bỏ qua khi bị yêu cầu mới "đè" lên.
+    gaps: []
+    required: true
+
+  testing_strategy:
+    score: 80
+    value: |
+      Đây là logic CI/orchestration (bash trong workflow YAML + hướng dẫn agent trong SKILL.md),
+      không có unit test áp dụng được. Verify bằng:
+      1. Review tĩnh: so sánh route logic mới với pattern đã có và đã chạy thật
+         (implement-resume, và userspec's "continue sau khi spec PR mở") để đảm bảo nhất quán.
+      2. Dry-run thủ công trên 1 repo đã bật online-pipeline + Slack bridge: tạo issue → qua spec →
+         implement → code PR mở → comment follow-up → xác nhận commit mới vào đúng PR, có comment
+         xác nhận, và việc huỷ-job-cũ-khi-có-comment-mới hoạt động đúng; xác nhận comment sau khi
+         merge không kích hoạt gì.
+    gaps: []
+    required: true
+
+user_experience:
+  user_stories:
+    score: 85
+    value: |
+      Là người dùng online-pipeline, sau khi review code PR tự động sinh ra, tôi muốn comment thêm
+      trên issue (hoặc reply trong Slack thread) để yêu cầu sửa/thêm/tối ưu, và thấy commit mới
+      xuất hiện ngay trên đúng PR đó — lặp lại được nhiều lần — để tôi hoàn thiện MR giống như đang
+      chat trực tiếp với Claude Code, thay vì phải tự sửa tay hoặc chờ merge xong mới sửa tiếp.
+    gaps: []
+    required: true
+
+  acceptance_criteria:
+    score: 90
+    value: |
+      AC1: Khi code PR của feature/{slug} đang OPEN và status marker đang ở ready_for_pr, một issue
+      comment mới (không phải Bot, không phải /switch-online) khiến route job trả về action mới
+      (followup) thay vì skip như hiện tại.
+      AC2: Stage followup coi comment mới là 1 yêu cầu thay đổi code mới (không phải câu trả lời
+      cho câu hỏi cũ) và chạy lại quy trình code-writing bình thường (kể cả review waves) trên
+      đúng nhánh feature/{slug} hiện có.
+      AC3: Khi thành công, commit mới được push vào feature/{slug}; PR đang mở tự cập nhật, không
+      tạo PR thứ hai; 1 comment xác nhận được post lên issue (và được mirror sang Slack ở repo đã
+      bật Slack bridge).
+      AC4: Nếu trong lúc followup, review wave của code-writing trả về finding cần quyết định của
+      người dùng (user_decision_required), xử lý giống implement gốc: ghi status awaiting_decision,
+      commit+push, hỏi qua comment, exit 0 — comment tiếp theo được xử lý qua đường resume hiện có
+      (trả lời câu hỏi), không bị hiểu nhầm là 1 followup request khác.
+      AC5: Nếu 1 comment followup khác tới trong lúc 1 followup đang chạy, job đang chạy bị huỷ
+      (concurrency cancel-in-progress) và job mới chạy theo yêu cầu mới nhất; không có gì bị push
+      từ job bị huỷ (vì chỉ push tại các checkpoint đã định nghĩa — xem code-research.md).
+      AC6: Nếu agent nhận định comment mới không phải là 1 yêu cầu thay đổi code thực sự (ví dụ "ok
+      cảm ơn"), nó trả lời ngắn qua comment mà không sửa code, và giữ status nguyên ready_for_pr.
+      AC7: Sau khi code PR merge (finalize xong), comment muộn trên issue không kích hoạt lại gì —
+      giữ hành vi skip như hiện tại.
+      AC8: Hành vi đối xứng với khả năng "chat tiếp sau khi spec PR mở" đã có sẵn ở stage userspec
+      (online-pipeline-userspec.yml's route job không chặn comment theo status).
+    gaps: []
+    required: true
+
+  edge_cases:
+    score: 85
+    value: |
+      - Comment tới đúng lúc nhánh feature/{slug} vừa được tạo (lần implement đầu tiên) nhưng chưa
+        có status file nào được commit — route job vẫn trả skip vì không match ready_for_pr (đã xác
+        minh trong code-research.md), không có race thật.
+      - Comment followup tới đúng lúc code PR vừa được merge — cần route job kiểm tra PR vẫn đang
+        OPEN tại thời điểm dispatch (không chỉ dựa vào status file); chấp nhận một khoảng race rất
+        nhỏ giống các "accepted rare risk" khác đã ghi trong SKILL.md.
+      - Nhiều comment followup tới liên tiếp rất nhanh (3+) — chỉ yêu cầu cuối cùng "thắng" sau khi
+        các job trước bị huỷ dây chuyền; các yêu cầu ở giữa bị bỏ qua — đây là hành vi được người
+        dùng chủ động chọn (huỷ để ưu tiên yêu cầu mới nhất), không phải lỗi.
+      - Yêu cầu followup mâu thuẫn với thay đổi vừa làm trước đó (ví dụ yêu cầu revert) — xử lý tự
+        nhiên vì mỗi lần followup đều chạy code-writing lại từ trạng thái nhánh hiện tại, không cần
+        logic đặc biệt.
+      - status đang là awaiting_decision (đang chờ trả lời 1 quyết định) mà có comment mới tới —
+        vẫn đi theo đường resume hiện có (coi là câu trả lời), không đi theo đường followup, vì hai
+        status này không thể cùng đúng lúc.
+    gaps: []
+    required: true
+
+  error_scenarios:
+    score: 80
+    value: |
+      - Lỗi kỹ thuật giữa lúc chạy followup (crash, tool error) — dùng lại đúng cơ chế ATTEMPTS=3 +
+        reset về LAST_GOOD + "Report technical failure" đã có cho implement hiện tại, không cần
+        logic mới.
+      - Rate-limit giữa lúc followup — dùng lại đúng cơ chế rate-limit auto-switch/resume đã có,
+        không liên quan đến thay đổi này.
+      - Huỷ job đúng lúc đang git push (race rất hiếm) — chấp nhận là rủi ro hiếm cho v1, không xây
+        cơ chế phục hồi đặc biệt (cùng mức độ chấp nhận với các rủi ro "accepted for v1" khác đã có
+        trong SKILL.md).
+    gaps: []
+    required: true
+
+  verification_strategy:
+    score: 80
+    value: |
+      Review tĩnh (so khớp với pattern implement-resume/userspec continue đã chạy thật) + dry-run
+      thủ công trên 1 repo đã bật online-pipeline + Slack bridge trước khi coi là xong — xem chi
+      tiết ở testing_strategy.
+    gaps: []
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    value: ""
+    gaps: []
+    required: false
+
+  risks:
+    score: 85
+    value: |
+      - Rủi ro: follow-up không giới hạn số lần có thể chạy vô hạn, tốn CI minutes/Claude usage.
+        Giảm nhẹ: đây là quyết định chủ động của người dùng (câu trả lời 4: "không giới hạn"); các
+        cơ chế có sẵn (ATTEMPTS retry cap, rate-limit auto-switch) vẫn giới hạn chi phí của 1 lần
+        chạy đơn lẻ.
+      - Rủi ro: cancel-in-progress huỷ đúng lúc job đang git push (không chỉ đang tính toán). Giảm
+        nhẹ: push chỉ xảy ra ở 2 checkpoint cố định (giống pattern đã có), nên rủi ro này hiếm và đã
+        được chấp nhận ở mức độ tương tự các rủi ro "accepted for v1" khác trong SKILL.md.
+      - Rủi ro: agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ
+        qua. Giảm nhẹ: agent vẫn luôn post lại 1 comment trả lời (AC3/AC6), nên người dùng luôn thấy
+        phản hồi và có thể yêu cầu lại nếu bị hiểu nhầm.
+      - Rủi ro còn sót lại sau 2 lớp post-gate re-check (status + PR-open, xem technical_decisions):
+        nếu 1 job resume/start (group khác, không bị cancel) và 1 job followup (dispatch từ snapshot
+        ready_for_pr cũ) đều vượt qua post-gate re-check của chính nó trong cùng 1 khoảng rất ngắn
+        (cả hai đọc đúng điều kiện của mình trước khi bên kia commit), rồi cả hai cùng push lên
+        feature/{slug} — job followup có thể push đè hoặc job followup's LAST_GOOD-reset (khi retry
+        kỹ thuật) có thể vô tình ghi đè mất commit awaiting_decision vừa được job kia push. Đây là
+         race rất hẹp (cần 2 job kết thúc đúng trong vài giây của nhau, theo đúng thứ tự sai) — chấp
+        nhận là rủi ro hiếm cho v1, cùng mức độ với các race khác đã được SKILL.md tự nhận là
+        "accepted rare risk" (ví dụ mục "Comment failure and revert" / "Push conflicts"), không xây
+        cơ chế lock phân tán cho race này.
+    gaps: []
+    required: true
+
+  technical_decisions:
+    score: 80
+    value: |
+      - Thêm route action mới "followup" (khác "resume") khi status==ready_for_pr + PR đang OPEN,
+        thay vì tái dùng "resume" — vì "resume" đóng khung comment là câu trả lời cho câu hỏi cũ,
+        sai bản chất với 1 yêu cầu mới.
+      - followup dùng concurrency group riêng (không chung với group của start/resume) với
+        cancel-in-progress=true, để không ảnh hưởng hành vi xếp-hàng-chờ (cancel-in-progress=false)
+        đang có cho awaiting_decision/resume. Lưu ý: route-job snapshot của 2 action có thể không
+        cùng điều kiện tại đúng 1 thời điểm (status không thể vừa awaiting_decision vừa ready_for_pr
+        TẠI THỜI ĐIỂM ĐỌC), nhưng vì 2 job chạy trên 2 group riêng (không cancel nhau), một job
+        resume/start đang chạy có thể kết thúc bằng việc commit awaiting_decision ĐÚNG LÚC 1 job
+        followup khác (dispatch từ snapshot ready_for_pr cũ hơn) đã qua được concurrency gate của
+        group riêng của nó — đây là race thật cần post-gate re-check xử lý, xem bullet dưới.
+      - Việc nhận định "comment có phải là yêu cầu thay đổi code thật hay chỉ là lời đáp xã giao"
+        giao cho agent tự quyết định trong stage prompt (SKILL.md), không viết filter từ khoá cứng
+        trong bash — nhất quán với cách routing trong skill này luôn "dumb"/deterministic, mọi nhận
+        định nội dung nằm trong claude -p.
+      - Không tạo status marker giá trị mới. Quan trọng: giá trị "in_progress" mà "Prepare the
+        feature branch" step ghi khi 1 job followup bắt đầu chỉ là printf vào file local của job
+        đó (xác minh tại online-pipeline-implement.yml dòng 99-125) — không có git commit/push nào
+        theo sau. status trên origin chỉ thực sự đổi khi agent tự commit+push lúc kết thúc
+        (awaiting_decision hoặc ready_for_pr). Vì vậy, trong suốt lúc 1 job followup đang chạy,
+        origin vẫn hiển thị ready_for_pr — nên route job của 1 comment followup thứ 2 tới giữa lúc
+        đó vẫn đọc đúng ready_for_pr và vẫn dispatch action=followup, cho phép cancel-in-progress
+        huỷ job cũ như AC5 yêu cầu. Đây chính là cơ chế khiến AC1 (dispatch khi ready_for_pr) và AC5
+        (huỷ job đang chạy khi có followup mới) không mâu thuẫn nhau.
+      - Post-gate re-check: sau khi giành được concurrency gate, job followup (trong chính bước
+        "Prepare the feature branch") re-fetch nhánh feature/{slug} và re-check CẢ HAI điều kiện
+        trước khi làm gì tiếp — không chỉ 1:
+        (a) status marker còn đúng là ready_for_pr không (giống hệt cách resume tự re-check
+        CURRENT_STATUS != "awaiting_decision" ở dòng 118-122 hiện tại) — bắt race với 1 job
+        resume/start/followup khác vừa kịp commit awaiting_decision hoặc ready_for_pr mới trước khi
+        job này qua được gate;
+        (b) PR của feature/{slug} còn đang OPEN không — bắt case đã merge, vì merge không ghi đè
+        status marker trên nhánh feature/{slug} (finalize chạy trên main, không đụng tới nhánh này),
+        nên check (a) một mình không phát hiện được việc đã merge.
+        Nếu 1 trong 2 điều kiện không còn đúng, set STALE=true và bỏ qua toàn bộ các bước còn lại —
+        không chạy code-writing, không ghi đè status, để job/comment đang là "sự thật mới nhất"
+        (câu hỏi awaiting_decision vừa được hỏi, hoặc PR đã merge) được xử lý qua đúng đường của nó.
+      - Push của followup phải được verify thành công, không được nuốt lỗi. Vì followup có group
+        concurrency riêng (không serialize với group của start/resume), đây là lần đầu tiên 2 job có
+        thể cùng chạy và cùng push vào feature/{slug} — nếu git push của agent (lúc commit
+        ready_for_pr/awaiting_decision ở cuối stage) bị reject (non-fast-forward, do job kia vừa
+        push trước), SKILL.md phải yêu cầu agent coi đây là lỗi kỹ thuật (fetch+xem lại, không tự
+        ghi đè/force-push) — không được tiếp tục như đã xong. Bước "Open the code PR" hiện có dùng
+        `git push ... || true` như 1 lưới an toàn (vốn chỉ để xử lý case "không có gì mới để push"),
+        không phải để che lỗi conflict thật — followup phải không dựa vào `|| true` đó để quyết định
+        thành công; chỉ coi là success khi status file local đọc được ready_for_pr VÀ agent xác nhận
+        push của chính nó không bị reject. Nếu không chắc, coi là lỗi kỹ thuật, để ATTEMPTS-retry
+        loop hiện có xử lý (reset về LAST_GOOD, thử lại) — không post comment xác nhận (AC3) khi
+        chưa chắc code đã lên PR thật.
+    gaps: []
+    required: false
+
+  deploy_approach:
+    score: 70
+    value: |
+      Thay đổi chỉ nằm trong skills/online-pipeline/SKILL.md + assets/workflows/
+      online-pipeline-implement.yml, cùng các bản vendored trùng (scaffold project-initialization,
+      mirror .codex) theo đúng "Setup Script Maintenance" đã ghi trong SKILL.md. Repo đang dùng
+      online-pipeline tiếp nhận thay đổi qua đường cập nhật đã có (chạy lại vendor-skills.sh), không
+      cần bước deploy mới.
+    gaps: []
+    required: false
+
+  manual_user_actions:
+    score: 70
+    value: |
+      Không có hành động thiết lập mới — người dùng chỉ cần merge code PR như hiện tại khi hài lòng.
+      Muốn chat qua Slack thì Slack bridge phải đã được bật từ trước (không phải yêu cầu mới của
+      feature này).
+    gaps: []
+    required: false
+
+integration:
+  integration_points:
+    score: 90
+    value: |
+      - skills/online-pipeline/assets/workflows/online-pipeline-implement.yml: route job (dòng
+        19-65) cần thêm nhánh action=followup; implement job cần concurrency group riêng cho
+        followup + prompt framing mới (dòng 148-301 hiện tại là nơi dựng prompt).
+      - skills/online-pipeline/SKILL.md: Naming Contract (giá trị status không đổi) + cần thêm 1
+        mục "Stage: implement (followup)" cạnh "Stage: implement-resume" hiện có.
+      - Các bản vendored phải đồng bộ theo đúng "Setup Script Maintenance" đã có trong SKILL.md:
+        skills/project-initialization/assets/new-project/.github/workflows/
+        online-pipeline-implement.yml, và các mirror dưới .codex/skills/online-pipeline/ +
+        .codex/skills/project-initialization/.../online-pipeline/.
+      - Không đổi gì ở online-pipeline-userspec.yml hay online-pipeline-finalize.yml — 2 workflow
+        đó không liên quan đến gap này.
+    gaps: []
+    required: true
+
+  dependencies:
+    score: 70
+    value: |
+      Tái dùng nguyên trạng: code-writing skill (review waves), Slack Bridge relay_to_slack
+      (mirror comment, không đổi), Rate-Limit Auto-Switch (không đổi), concurrency group pattern
+      của GitHub Actions đã dùng cho implement-resume.
+    gaps: []
+    required: false
+
+  technical_constraints:
+    score: 60
+    value: |
+      GitHub Actions concurrency cancel-in-progress chỉ huỷ job đang chạy, không rollback commit đã
+      push — an toàn vì push chỉ xảy ra ở checkpoint (đã xác minh trong code-research.md), không
+      cần cơ chế rollback riêng.
+    gaps: []
+    required: false
+
+  data_requirements:
+    score: 0
+    value: ""
+    gaps: []
+    required: false
+
+  migration_needs:
+    score: 0
+    value: ""
+    gaps: []
+    required: false
+
+notes: ""
