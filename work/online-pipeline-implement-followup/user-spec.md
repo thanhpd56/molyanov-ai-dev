@@ -66,9 +66,10 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   `feature/{slug}` hiện có.
 - [ ] AC3: Khi thành công, commit mới được push vào `feature/{slug}`; PR đang mở tự cập nhật, không
   tạo PR thứ hai; 1 comment xác nhận được post lên issue (mirror sang Slack ở repo đã bật Slack
-  bridge) — post bằng bước bash xác định ngay sau khi xác nhận push thành công (không phải agent tự
-  post trong session của nó), để thu hẹp tối đa khoảng hở có thể bị `cancel-in-progress` huỷ giữa
-  lúc push xong và lúc post comment (xem Risk 4).
+  bridge) — post bằng bước bash xác định (không phải agent tự post trong session của nó), chỉ sau
+  khi bước bash đó TỰ KIỂM TRA exit code của lệnh push và xác nhận push thực sự thành công (không
+  dùng `|| true` để bỏ qua lỗi). Nếu push thất bại thật, không post comment xác nhận — coi là lỗi kỹ
+  thuật, đi qua ATTEMPTS-retry loop hiện có (xem Risk 4).
 - [ ] AC4: Nếu trong lúc followup, review wave của `code-writing` trả về finding cần quyết định của
   người dùng (`user_decision_required`), xử lý giống implement gốc: ghi `status: awaiting_decision`,
   commit+push, hỏi qua comment, exit 0 — comment tiếp theo được xử lý qua đường `resume` hiện có
@@ -110,21 +111,25 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   followup dùng chung concurrency group với start/resume (xem Accepted Decisions), tại 1 thời điểm
   chỉ có đúng 1 job chạy cho 1 slug — rủi ro chỉ còn ở phạm vi 1 job tự bị huỷ giữa lúc push của
   chính nó, không phải 2 job khác nhau cùng push đè nhau.
+- **Risk 3:** Agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ qua.
+  **Mitigation:** Agent vẫn luôn post lại 1 comment trả lời (AC3/AC6), nên người dùng luôn thấy phản
+  hồi và có thể yêu cầu lại nếu bị hiểu nhầm.
 - **Risk 4:** Vì `cancel-in-progress=true` huỷ TOÀN BỘ job đang chạy (không chỉ phần chưa push), 1
   job followup có thể bị 1 comment follow-up mới hơn huỷ ngay SAU KHI code đã push thành công nhưng
   TRƯỚC KHI kịp post comment xác nhận (AC3) — vì push và post-comment là 2 bước riêng trong cùng 1
   session agent. **Mitigation:** Việc post comment xác nhận (AC3) được chuyển ra bước bash xác định
-  (deterministic), ngay sau khi xác nhận push đã thành công — giống cách "Open the code PR" hiện tại
-  là bash thuần, không phải agent tự làm — để thu hẹp tối đa khoảng hở có thể bị huỷ giữa push và
-  comment (còn lại gần như tức thời, không phải cả 1 lượt gọi `claude -p`). Phần rủi ro còn sót (huỷ
-  đúng lúc bash đang chạy, cực hiếm) được chấp nhận vì không mất code: commit đã push thành công
-  trước khi bị huỷ, không bị mất; job follow-up mới hơn (chính là lý do gây huỷ) sẽ tự hoàn thành và
-  post comment xác nhận của riêng nó ngay sau đó, nên người dùng vẫn luôn nhận được phản hồi cuối
-  cùng — chỉ có thể thiếu xác nhận riêng cho đúng yêu cầu đã bị "đè" lên, không phải mất phản hồi
-  hoàn toàn.
-- **Risk 3:** Agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ qua.
-  **Mitigation:** Agent vẫn luôn post lại 1 comment trả lời (AC3/AC6), nên người dùng luôn thấy phản
-  hồi và có thể yêu cầu lại nếu bị hiểu nhầm.
+  (deterministic), ngay sau khi xác nhận push đã thành công — để thu hẹp tối đa khoảng hở có thể bị
+  huỷ giữa push và comment (còn lại gần như tức thời, không phải cả 1 lượt gọi `claude -p`). Bước
+  bash này PHẢI tự kiểm tra exit code của lệnh push (không dùng `|| true` như "Open the code PR"
+  hiện tại — pattern đó chỉ phù hợp cho 1 push không-có-gì-mới/vô hại, không phù hợp để quyết định
+  có post comment xác nhận hay không): push thành công thật mới post comment; push thất bại thật
+  (không phải do bị cancel — nếu bị cancel thì cả job, kể cả bước bash này, đã dừng hẳn, không chạy
+  tiếp được nữa) được coi là lỗi kỹ thuật, đi qua ATTEMPTS-retry loop hiện có, không post comment
+  xác nhận sai. Phần rủi ro còn sót (huỷ đúng lúc chính bước bash này đang chạy, cực hiếm) được chấp
+  nhận vì không mất code: commit đã push thành công trước khi bị huỷ, không bị mất; job follow-up
+  mới hơn (chính là lý do gây huỷ) sẽ tự hoàn thành và post comment xác nhận của riêng nó ngay sau
+  đó, nên người dùng vẫn luôn nhận được phản hồi cuối cùng — chỉ có thể thiếu xác nhận riêng cho
+  đúng yêu cầu đã bị "đè" lên, không phải mất phản hồi hoàn toàn.
 
 ## Accepted Decisions
 - Thêm route action mới `followup` (khác `resume`) khi `status==ready_for_pr` + PR đang `OPEN`,
