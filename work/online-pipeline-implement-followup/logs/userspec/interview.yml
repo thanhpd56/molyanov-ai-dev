@@ -53,6 +53,29 @@ conversation_history:
          của mr
       3. huỷ job đang chạy để làm theo yêu cầu mới nhất
       4. không giới hạn, cho đến lúc approve merge code.
+  - asked_at: "2026-10-07 09:40:00"
+    topic_keys: ["technical_decisions", "risks"]
+    agent_questions: |
+      (Not a user question — validation round 1 finding, resolved as a local technical correction.)
+      userspec-adequacy-validator flagged that giving "followup" its own concurrency group (separate
+      from start/resume's group) was the first design letting two jobs push to feature/{slug}
+      concurrently, requiring a dedicated push-verification mechanism and an accepted residual race
+      (the draft's Risk 3/Risk 4) to compensate. It proposed a simpler existing alternative: reuse
+      the SAME concurrency group for all actions on a slug, with `cancel-in-progress` set
+      conditionally (`${{ action == 'followup' }}`) — GitHub Actions already guarantees only one job
+      per group actually runs at a time, which removes the cross-job push race structurally instead
+      of mitigating around it. userspec-quality-validator separately flagged: AC1 wrongly added a
+      `/switch-online` content check to the route job (contradicting this skill's "dumb routing"
+      decision and existing precedent — /switch-online is only relevant to the pre-PR local/online
+      handoff, not reachable in this feature's ready_for_pr/PR-open window), and AC5's absolute
+      "nothing is ever pushed from a canceled job" claim contradicted Risk 2's accepted mid-push
+      cancellation case.
+    user_answer: |
+      (No user input — these are implementation-mechanism/architecture corrections that don't change
+      any user-facing behavior or acceptance outcome, so resolved directly in user-spec.md rather
+      than interrupting the user: merged to one shared concurrency group (removes Risk 3/Risk 4
+      entirely), dropped the `/switch-online` clause from AC1, and reworded AC5 to be consistent with
+      Risk 2 instead of contradicting it.)
   - asked_at: "2026-10-06 22:58:00"
     topic_keys: ["acceptance_criteria", "error_scenarios", "verification_strategy", "risks"]
     agent_questions: |

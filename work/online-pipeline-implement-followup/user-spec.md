@@ -59,30 +59,31 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
 
 ## Acceptance Criteria
 - [ ] AC1: Khi code PR của `feature/{slug}` đang `OPEN` và status marker đang `ready_for_pr`, 1
-  issue comment mới (không phải Bot, không phải `/switch-online`) khiến route job trả về
-  `action=followup` thay vì `skip` như hiện tại.
+  issue comment mới (không phải Bot) khiến route job trả về `action=followup` thay vì `skip` như
+  hiện tại.
 - [ ] AC2: Stage followup coi comment mới là 1 yêu cầu thay đổi code mới (không phải câu trả lời cho
   câu hỏi cũ) và chạy lại quy trình `code-writing` bình thường (kể cả review waves) trên đúng nhánh
   `feature/{slug}` hiện có.
-- [ ] AC3: Khi thành công, commit mới được push vào `feature/{slug}` (verify push thực sự thành
-  công, không chỉ dựa vào bước push an toàn `|| true` hiện có — xem Risk 3); PR đang mở tự cập nhật,
-  không tạo PR thứ hai; 1 comment xác nhận được post lên issue (mirror sang Slack ở repo đã bật Slack
-  bridge). Không post comment xác nhận nếu chưa chắc code đã lên PR thật.
+- [ ] AC3: Khi thành công, commit mới được push vào `feature/{slug}`; PR đang mở tự cập nhật, không
+  tạo PR thứ hai; 1 comment xác nhận được post lên issue (mirror sang Slack ở repo đã bật Slack
+  bridge).
 - [ ] AC4: Nếu trong lúc followup, review wave của `code-writing` trả về finding cần quyết định của
   người dùng (`user_decision_required`), xử lý giống implement gốc: ghi `status: awaiting_decision`,
   commit+push, hỏi qua comment, exit 0 — comment tiếp theo được xử lý qua đường `resume` hiện có
   (trả lời câu hỏi), không bị hiểu nhầm là 1 followup request khác.
 - [ ] AC5: Nếu 1 comment followup khác tới trong lúc 1 followup đang chạy, job đang chạy bị huỷ
-  (concurrency `cancel-in-progress`) và job mới chạy theo yêu cầu mới nhất; không có gì bị push từ
-  job bị huỷ (vì chỉ push tại các checkpoint đã định nghĩa, xem Accepted Decisions).
+  (concurrency `cancel-in-progress`) và job mới chạy theo yêu cầu mới nhất. Vì push chỉ xảy ra ở các
+  checkpoint đã định nghĩa (không liên tục), job bị huỷ trước khi tới checkpoint không để lại gì
+  trên `origin`; trường hợp hiếm bị huỷ đúng lúc đang thực thi lệnh push xem Risk 2.
 - [ ] AC6: Nếu agent nhận định comment mới không phải là 1 yêu cầu thay đổi code thực sự (ví dụ "ok
   cảm ơn"), nó trả lời ngắn qua comment mà không sửa code, và giữ status nguyên `ready_for_pr`.
 - [ ] AC7: Sau khi code PR merge (finalize xong), comment muộn trên issue không kích hoạt lại gì —
   giữ hành vi `skip` như hiện tại (route job kiểm tra PR không còn `OPEN`).
 - [ ] AC8: Trước khi chạy `code-writing`, job followup re-check (sau khi đã giành được concurrency
-  gate của riêng nó) cả 2 điều kiện: status marker vẫn đúng `ready_for_pr`, và PR vẫn `OPEN`. Nếu 1
-  trong 2 sai, job tự dừng (không chạy code-writing, không ghi gì) — tránh chạy chồng lên 1 quyết
-  định (`awaiting_decision`) hoặc 1 PR đã merge vừa xảy ra ở nơi khác.
+  gate — tức đã tới lượt chạy, giống cách resume đã làm) cả 2 điều kiện: status marker vẫn đúng
+  `ready_for_pr`, và PR vẫn `OPEN`. Nếu 1 trong 2 sai (ví dụ đã bị 1 followup mới hơn/1 quyết định
+  `awaiting_decision` đè lên trong lúc chờ tới lượt, hoặc PR đã merge), job tự dừng (không chạy
+  code-writing, không ghi gì).
 
 ## Constraints
 - Chỉ hoạt động trong khoảng `status == ready_for_pr` và code PR còn `OPEN` (chưa merge); không
@@ -100,23 +101,14 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
 - **Risk 1:** Follow-up không giới hạn số lần có thể chạy vô hạn, tốn CI minutes/Claude usage.
   **Mitigation:** Đây là quyết định chủ động của người dùng; các cơ chế có sẵn (ATTEMPTS retry cap,
   rate-limit auto-switch) vẫn giới hạn chi phí của 1 lần chạy đơn lẻ.
-- **Risk 2:** `cancel-in-progress` huỷ đúng lúc job đang git push (không chỉ đang tính toán).
+- **Risk 2:** `cancel-in-progress` huỷ đúng lúc job đang thực thi lệnh git push (không chỉ đang tính
+  toán) — cancel tới sau khi lệnh push đã bắt đầu nhưng trước khi job kịp ghi nhận kết quả.
   **Mitigation:** Push chỉ xảy ra ở các checkpoint cố định (không phải liên tục), nên rủi ro này
-  hiếm; chấp nhận ở mức độ tương tự các rủi ro "accepted for v1" khác đã có trong `SKILL.md`.
-- **Risk 3:** Vì followup dùng concurrency group riêng (không chung với group của start/resume, để
-  giữ nguyên hành vi xếp-hàng-chờ hiện có cho `awaiting_decision`/`resume`), đây là lần đầu 2 job có
-  thể cùng push vào `feature/{slug}`. Nếu push của agent bị reject (non-fast-forward) và bị nuốt lỗi
-  bởi bước push an toàn `|| true` hiện có, pipeline có thể báo "thành công" dù code chưa thực sự lên
-  PR. **Mitigation:** Push của followup phải được verify thành công (không dựa vào `|| true`); 1
-  push bị reject phải được coi là lỗi kỹ thuật, xử lý qua ATTEMPTS-retry loop hiện có — không post
-  comment xác nhận khi chưa chắc code đã lên PR.
-- **Risk 4:** Race rất hẹp còn sót lại sau các post-gate re-check ở AC8: nếu 1 job resume/start
-  (group khác, không bị huỷ) và 1 job followup đều vượt qua re-check của chính nó trong cùng vài
-  giây (đọc đúng điều kiện của mình trước khi bên kia commit), cả hai có thể cùng push gần nhau.
-  **Mitigation:** Chấp nhận là rủi ro hiếm cho v1, cùng mức độ với các race khác `SKILL.md` đã tự
-  nhận là "accepted rare risk" (ví dụ mục "Comment failure and revert", "Push conflicts"); không xây
-  cơ chế lock phân tán cho race này.
-- **Risk 5:** Agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ qua.
+  hiếm; chấp nhận ở mức độ tương tự các rủi ro "accepted for v1" khác đã có trong `SKILL.md`. Vì
+  followup dùng chung concurrency group với start/resume (xem Accepted Decisions), tại 1 thời điểm
+  chỉ có đúng 1 job chạy cho 1 slug — rủi ro chỉ còn ở phạm vi 1 job tự bị huỷ giữa lúc push của
+  chính nó, không phải 2 job khác nhau cùng push đè nhau.
+- **Risk 3:** Agent nhận định sai 1 yêu cầu thay đổi thật là "chỉ là lời cảm ơn" nên im lặng bỏ qua.
   **Mitigation:** Agent vẫn luôn post lại 1 comment trả lời (AC3/AC6), nên người dùng luôn thấy phản
   hồi và có thể yêu cầu lại nếu bị hiểu nhầm.
 
@@ -124,9 +116,17 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
 - Thêm route action mới `followup` (khác `resume`) khi `status==ready_for_pr` + PR đang `OPEN`,
   thay vì tái dùng `resume` — vì `resume` đóng khung comment là câu trả lời cho câu hỏi cũ, sai bản
   chất với 1 yêu cầu mới.
-- `followup` dùng concurrency group riêng (không chung với group của start/resume) với
-  `cancel-in-progress=true`, để không ảnh hưởng hành vi xếp-hàng-chờ (`cancel-in-progress=false`)
-  đang có cho `awaiting_decision`/`resume`.
+- `followup` dùng CHUNG concurrency group `online-pipeline-implement-{slug}` với start/resume
+  (không tách group riêng), chỉ khác giá trị `cancel-in-progress` theo action đang dispatch:
+  `cancel-in-progress: ${{ action == 'followup' }}` — tức 1 job followup mới sẽ huỷ bất kỳ job nào
+  (start/resume/followup khác) đang chạy/đang chờ trong group đó, còn 1 job start/resume mới vẫn
+  xếp hàng chờ như hành vi hiện tại (`cancel-in-progress=false`), không đổi gì cho đường đó. Lý do
+  chọn 1 group chung thay vì 2 group riêng: GitHub Actions chỉ cho đúng 1 job chạy thật trong 1
+  group tại 1 thời điểm (job khác bị huỷ hoặc phải chờ), nên dùng chung group loại bỏ hoàn toàn khả
+  năng 2 job (ví dụ 1 resume đang xử lý quyết định và 1 followup khác) cùng chạy và cùng push vào
+  `feature/{slug}` — không cần dựng thêm cơ chế verify-push hay chấp nhận rủi ro race giữa 2 job,
+  đơn giản hơn so với phương án tách group riêng ban đầu. Cơ chế cancel/queue theo group này đã được
+  project tự tin cậy sẵn (resume's "xếp hàng chờ" hiện tại chính là queue-trong-1-group).
 - Việc nhận định "comment có phải là yêu cầu thay đổi code thật hay chỉ là lời đáp xã giao" giao cho
   agent tự quyết định trong stage prompt, không viết filter từ khoá cứng trong bash — nhất quán với
   cách routing trong skill này luôn "dumb"/deterministic, mọi nhận định nội dung nằm trong `claude
@@ -138,9 +138,12 @@ route job của `online-pipeline-userspec.yml` không chặn theo status (chỉ 
   followup thứ 2 vẫn dispatch đúng `action=followup`, cho phép `cancel-in-progress` huỷ job cũ như
   AC5 yêu cầu (không cần giá trị status mới).
 - Post-gate re-check (AC8) kiểm tra cả 2 điều kiện — status vẫn `ready_for_pr` và PR vẫn `OPEN` —
-  vì mỗi điều kiện bắt 1 loại race khác nhau: check status bắt race với 1 job khác vừa commit
-  `awaiting_decision`/`ready_for_pr` mới; check PR-open bắt case đã merge (vì finalize chạy trên
-  `main`, không đụng tới status marker trên `feature/{slug}`).
+  giống nguyên văn cách resume đã tự re-check `CURRENT_STATUS != "awaiting_decision"` sau khi tới
+  lượt chạy (vì snapshot của route job có thể đã cũ nếu job này phải xếp hàng chờ). Cần cả 2 điều
+  kiện vì mỗi điều kiện bắt 1 trường hợp khác nhau: check status bắt việc 1 job khác (chạy trước
+  trong cùng group) vừa commit `awaiting_decision`/`ready_for_pr` mới trước khi tới lượt job này;
+  check PR-open bắt case đã merge trong lúc chờ (vì finalize chạy trên `main`, không đụng tới status
+  marker trên `feature/{slug}`, nên check status một mình không phát hiện được việc đã merge).
 - Xác nhận follow-up (AC3) là bắt buộc, không im lặng — khác với lần implement đầu tiên (hiện tại
   không post comment khi mở PR lần đầu), vì PR đã tồn tại nên "đã tạo PR" không còn là tín hiệu đủ
   rõ; cần 1 tín hiệu riêng cho mỗi lần follow-up để người dùng biết chắc là đã xử lý xong.
@@ -166,7 +169,7 @@ thật trên GitHub Actions.
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Review diff của `online-pipeline-implement.yml` (route job + concurrency block mới) và `SKILL.md` (mục Stage: implement followup mới) so với pattern đã có của `implement-resume` | Action `followup` được thêm nhất quán: dispatch condition, prompt framing ("yêu cầu mới" không phải "câu trả lời"), post-gate re-check cả status+PR-open, push-verify trước khi báo success — không có đoạn nào copy nguyên `resume`'s "answer to the question" framing. |
+| 1. Review diff của `online-pipeline-implement.yml` (route job + concurrency block dùng chung group, chỉ `cancel-in-progress` khác theo action) và `SKILL.md` (mục Stage: implement followup mới) so với pattern đã có của `implement-resume` | Action `followup` được thêm nhất quán: dispatch condition, prompt framing ("yêu cầu mới" không phải "câu trả lời"), post-gate re-check cả status+PR-open (giống stale-guard của resume) — không có đoạn nào copy nguyên `resume`'s "answer to the question" framing; concurrency group giống `online-pipeline-implement-${slug}` hiện có, không tạo group mới. |
 | 2. Review đồng bộ vendored copies (`skills/project-initialization/assets/new-project/.github/workflows/online-pipeline-implement.yml`, mirror `.codex/`) | Nội dung khớp với bản nguồn trong `skills/online-pipeline/`, theo đúng "Setup Script Maintenance". |
 | 3. Kiểm tra YAML hợp lệ (`actionlint`/`yamllint` nếu có sẵn trong repo, hoặc ít nhất parse YAML) | Không có lỗi cú pháp trong các file workflow đã sửa. |
 
