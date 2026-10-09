@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-09 00:00:00"
-  last_updated: "2026-10-09 03:00:00"
+  last_updated: "2026-10-09 03:30:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -185,6 +185,23 @@ conversation_history:
       đã biết, không sửa gì; (B) sửa luôn Hybrid Switch để đọc marker active_branch thay cho
       literal feature/{slug}.
     user_answer: "b (mở rộng fix sang Hybrid Local/Online Switch)"
+
+  - asked_at: "2026-10-09 03:30:00"
+    topic_keys: ["technical_decisions", "edge_cases", "risks", "acceptance_criteria"]
+    agent_questions: |
+      Validation round 4 (theo yêu cầu rõ ràng của user sau round 3): 2 lỗi local tự sửa (SKILL.md
+      header "Stage: finalize" + Hybrid Switch case 4/5 còn sót câu "merge code PR → finalize tự
+      chạy" — SAI theo thiết kế mới, cần cập nhật; Accepted Decisions trích dẫn sai file precedent
+      cho defensive-create label — setup-online-pipeline.sh chỉ tạo label 1 lần lúc setup, không
+      phải tại điểm dùng; điểm dùng thật là 3 file khác, và knowledge-init's nằm ngoài repo này).
+      1 phát hiện cần quyết định: race condition giữa lúc dispatch finalize (AC9) và lúc finalize
+      THỰC SỰ xong (AC11, gỡ label) — trong lúc finalize đang chạy (gọi claude -p, tốn thời gian),
+      label vẫn còn + work/completed/{slug} chưa tồn tại, nên 1 comment khác tới đúng lúc đó vẫn bị
+      dispatch thêm 1 job post-merge khác, có thể đọc/ghi work/{slug} cùng lúc finalize đang
+      archive nó. Đề xuất: job finalize tự gỡ label NGAY KHI BẮT ĐẦU chạy (trước khi gọi
+      documentation-writing), coi như khoá; nếu finalize thất bại thật (hết retry), bước báo lỗi
+      tự đặt lại label để issue về trạng thái "đang chờ followup".
+    user_answer: "ok"
 
 general_understanding:
   feature_name:
