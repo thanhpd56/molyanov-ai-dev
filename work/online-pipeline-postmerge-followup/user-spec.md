@@ -23,18 +23,24 @@ followup/chốt" trên issue — issue vẫn mở, không tự đóng, không t�
 trên issue được agent tự phân loại: chỉ hỏi-đáp (trả lời, không đổi gì), yêu cầu sửa thêm (tạo 1
 branch+PR mới từ `main`, chạy `code-writing` như 1 round implement mới), hoặc tín hiệu người dùng
 đã hài lòng/muốn chốt (dispatch job `finalize` thật — cập nhật Project Knowledge, archive, đóng
-issue). Số round không giới hạn.
+issue). "Branch của round đang mở" được ghi nhớ bằng 1 marker trong issue body, để route
+job/implement job luôn biết chính xác đang làm việc trên branch nào dù round nào. Số round không
+giới hạn.
 
 ## Why
 Hiện tại, ngay khi code PR merge, `online-pipeline-finalize.yml` tự động chạy: cập nhật Project
-Knowledge, chuyển `work/{slug}/` vào `work/completed/{slug}/`, đóng issue. Người dùng mất kênh để
-hỏi thêm (ví dụ về cách deploy repo đích — nằm ngoài phạm vi pipeline này) hoặc yêu cầu sửa/tối ưu
-thêm sau khi đã thấy code thật chạy. Muốn sửa gì sau đó phải tạo 1 issue/feature hoàn toàn mới, mất
-hết context (`user-spec.md`, `decisions.md` cũ của feature đó). Feature `online-pipeline-implement-
-followup` (đã merge trước đó) đã chủ động để ngoài phạm vi trường hợp này — xem Accepted Decisions
-của spec đó: "1 thay đổi sau khi đã merge là 1 feature/fix mới, không phải follow-up của PR cũ."
-Feature này đảo lại quyết định đó: biến việc "sửa thêm sau merge" thành 1 phần tự nhiên của cùng
-cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi lần.
+Knowledge, chuyển `work/{slug}/` vào `work/completed/{slug}/`, commit vào `main` (bản thân finalize
+hiện tại **không** tự đóng issue — `SKILL.md` ghi rõ "no auto-close is added" cho đường này; issue
+chỉ hết được theo dõi về mặt dữ liệu, không có tín hiệu kết thúc rõ ràng nào trên GitHub). Dù vậy,
+không có cách nào để người dùng tiếp tục hỏi thêm (ví dụ về cách deploy repo đích — nằm ngoài phạm
+vi pipeline này) hoặc yêu cầu sửa/tối ưu thêm sau khi đã thấy code thật chạy, vì route job hiện tại
+luôn `skip` mọi comment một khi code PR đã merge. Muốn sửa gì sau đó phải tạo 1 issue/feature hoàn
+toàn mới, mất hết context (`user-spec.md`, `decisions.md` cũ của feature đó). Feature
+`online-pipeline-implement-followup` (đã merge trước đó) đã chủ động để ngoài phạm vi trường hợp
+này — xem Accepted Decisions của spec đó: "1 thay đổi sau khi đã merge là 1 feature/fix mới, không
+phải follow-up của PR cũ." Feature này đảo lại quyết định đó: biến việc "sửa thêm sau merge" thành
+1 phần tự nhiên của cùng cuộc hội thoại trên issue, và bổ sung luôn 1 tín hiệu đóng issue rõ ràng
+(AC11) mà hôm nay chưa có.
 
 ## Expected Behavior
 1. Code PR của round hiện tại (`feature/{slug}` nếu là round 1, `feature/r{N}-{slug}` nếu là round
@@ -51,27 +57,36 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
    - **Hỏi-đáp/xã giao** (ví dụ "cảm ơn", hỏi chung về deploy của repo đích — nằm ngoài phạm vi
      pipeline): trả lời ngắn qua comment, không tạo branch/PR, không đổi label, không chạy
      `code-writing`.
-   - **Yêu cầu sửa code thêm**: gỡ label `online-pipeline-merged-awaiting-followup`, tạo branch mới
-     từ `main` hiện tại (`feature/r{N}-{slug}`, N = số PR round đã từng mở cho slug này + 1), label
-     `userspec-implement`, đọc lại `work/{slug}/user-spec.md` + `decisions.md` gốc để có context,
-     coi comment là yêu cầu bổ sung, chạy `code-writing` bình thường (không chạy lại interview
-     user-spec-planning).
-   - **Tín hiệu hài lòng/muốn chốt**: dispatch (`gh workflow run online-pipeline-finalize.yml`,
-     kèm slug/issue number) job `finalize` thật — không tự chạy logic finalize ngay trong job đang
-     xử lý comment này.
-5. Trong lúc PR round mới (bước 4, nhánh "yêu cầu sửa thêm") đang mở: comment tiếp theo xử lý đúng
-   y như cơ chế `implement-followup`/`implement-resume` hiện có, bao gồm `cancel-in-progress` khi
-   có comment mới tới trong lúc round đang chạy. Toàn bộ (mọi round + job xử lý comment sau merge)
-   dùng chung 1 concurrency group `online-pipeline-implement-{slug}`.
-6. Khi PR round đó merge: quay lại bước 2 (label được set lại), lặp lại từ bước 3. Không giới hạn
+   - **Yêu cầu sửa code thêm**: gỡ label `online-pipeline-merged-awaiting-followup`, tính
+     N = (số PR đã từng mở cho slug này, khớp `feature/{slug}` HOẶC `feature/r*-{slug}`) + 1 (round
+     1 — không tiền tố — luôn được tính vào, nên lần sửa thêm đầu tiên luôn ra round 2), tạo branch
+     mới `feature/r{N}-{slug}` từ `main` hiện tại, label `userspec-implement`, ghi/cập nhật marker
+     `active_branch` trong issue body (xem Constraints) thành branch này, đọc lại
+     `work/{slug}/user-spec.md` + `decisions.md` gốc để có context, coi comment là yêu cầu bổ
+     sung, chạy `code-writing` bình thường (không chạy lại interview user-spec-planning).
+   - **Tín hiệu hài lòng/muốn chốt**: dispatch (`gh workflow run online-pipeline-finalize.yml -f
+     slug={slug} -f issue_number={issue_number}`) job `finalize` thật — không tự chạy logic
+     finalize ngay trong job đang xử lý comment này.
+5. Nếu có 1 comment khác tới ngay trong lúc agent đang xử lý bước 4 (đang phân loại, chưa kịp tạo
+   round mới hoặc dispatch finalize) — job đang chạy bị huỷ (cancel-in-progress), job mới chạy theo
+   đúng comment mới nhất. Áp dụng cùng quy tắc khi 1 round đã có branch/PR đang mở (bước 6).
+6. Trong lúc PR round mới (bước 4, nhánh "yêu cầu sửa thêm") đang mở: comment tiếp theo xử lý đúng
+   y như cơ chế `implement-followup`/`implement-resume` hiện có, bao gồm `cancel-in-progress`.
+   Route job/implement job xác định đúng branch đang mở bằng cách đọc marker `active_branch` trong
+   issue body (xem Constraints) — không còn giả định cứng tên branch là `feature/{slug}`. Toàn bộ
+   (mọi round + job xử lý comment sau merge) dùng chung 1 concurrency group
+   `online-pipeline-implement-{slug}`.
+7. Khi PR round đó merge: quay lại bước 2 (label được set lại), lặp lại từ bước 3. Không giới hạn
    số round.
-7. Job `finalize` (dispatch ở bước 4, nhánh "chốt") chạy dưới đúng concurrency group chung
+8. Job `finalize` (dispatch ở bước 4, nhánh "chốt") chạy dưới đúng concurrency group chung
    `online-pipeline-finalize` hiện có (chia sẻ với `knowledge-init`, không đổi) — không phải group
-   riêng theo slug. Nó chạy Feature Finalization Mode như hiện tại (cập nhật Project Knowledge,
-   chuyển `work/{slug}/` vào `work/completed/{slug}/`), gỡ label
-   `online-pipeline-merged-awaiting-followup`, post 1 comment xác nhận hoàn tất — nói rõ "đã hoàn
-   tất; nếu cần sửa thêm, tạo issue/feature mới" — rồi đóng issue.
-8. Feature này chỉ áp dụng từ nay về sau (code PR merge sau khi deploy thay đổi này); không xử lý
+   riêng theo slug. Nó nhận `slug`/`issue_number` từ input `workflow_dispatch` (không còn
+   `github.event.pull_request.head.ref` để tự đọc, vì không còn PR nào gắn với event này), chạy
+   Feature Finalization Mode như hiện tại (cập nhật Project Knowledge, chuyển `work/{slug}/` vào
+   `work/completed/{slug}/`), gỡ label `online-pipeline-merged-awaiting-followup`, post 1 comment
+   xác nhận hoàn tất — nói rõ "đã hoàn tất; nếu cần sửa thêm, tạo issue/feature mới" — rồi **đóng
+   issue** (hành vi mới; finalize hiện tại không tự đóng issue, xem Why).
+9. Feature này chỉ áp dụng từ nay về sau (code PR merge sau khi deploy thay đổi này); không xử lý
    ngược cho issue đã merge/đã đóng theo cơ chế cũ.
 
 ## Acceptance Criteria
@@ -94,31 +109,54 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
   đổi/chốt thật) → trả lời ngắn qua comment, không tạo branch/PR, không đổi label, không chạy
   `code-writing`, không chạy finalize.
 - [ ] AC6: Stage post-merge nhận định comment mới nhất là yêu cầu sửa code thêm → gỡ label
-  `online-pipeline-merged-awaiting-followup`; tạo branch mới `feature/r{N}-{slug}` từ `main` hiện
-  tại (N = số PR round đã từng mở cho slug này, tính qua `gh pr list` khớp pattern
-  `feature/r*-{slug}`, cộng thêm 1 — không lưu counter riêng); label `userspec-implement`; đọc lại
+  `online-pipeline-merged-awaiting-followup`; tính N = (số PR đã từng mở cho slug này, khớp
+  `feature/{slug}` HOẶC `feature/r*-{slug}` — liệt kê qua `gh pr list --state all --json
+  headRefName` rồi lọc bằng regex phía client, vì `gh pr list --head` không hỗ trợ glob) + 1 (round
+  1 không tiền tố luôn được tính, nên lần sửa thêm đầu tiên luôn ra round 2); tạo branch mới
+  `feature/r{N}-{slug}` từ `main` hiện tại; label `userspec-implement`; ghi/cập nhật marker
+  `active_branch` trong issue body (AC13) thành branch mới này; đọc lại
   `work/{slug}/user-spec.md` + `decisions.md` gốc; chạy `code-writing` bình thường (không chạy lại
   interview `user-spec-planning`), coi comment là yêu cầu bổ sung — không phải câu trả lời cho câu
   hỏi cũ.
 - [ ] AC7: PR round N (AC6) đang mở → mọi comment tiếp theo xử lý đúng y cơ chế
-  `implement-followup`/`implement-resume` hiện có không đổi, bao gồm `cancel-in-progress` khi có
-  comment mới tới trong lúc round đang chạy. Mọi round + job xử lý comment sau merge dùng chung 1
-  concurrency group `online-pipeline-implement-{slug}`.
-- [ ] AC8: Stage post-merge nhận định comment mới nhất là tín hiệu hài lòng/muốn chốt → dispatch
-  (`gh workflow run online-pipeline-finalize.yml` kèm slug/issue number) job `finalize` riêng —
-  KHÔNG tự chạy logic finalize (update Project Knowledge/archive/đóng issue) ngay trong job xử lý
-  comment này.
-- [ ] AC9: Job `finalize` (dispatch ở AC8) chạy dưới đúng concurrency group chung
+  `implement-followup`/`implement-resume` hiện có, bao gồm `cancel-in-progress` khi có comment mới
+  tới trong lúc round đang chạy — route job/implement job xác định branch đang hoạt động bằng cách
+  đọc marker `active_branch` (AC13), không còn giả định cứng `feature/{slug}`. Mọi round + job xử
+  lý comment sau merge dùng chung 1 concurrency group `online-pipeline-implement-{slug}`.
+- [ ] AC8: Nếu có 1 comment khác tới trong lúc agent đang phân loại comment ở stage post-merge
+  (TRƯỚC khi kịp tạo round mới hoặc dispatch finalize) → job phân loại đang chạy bị huỷ
+  (cancel-in-progress), job mới chạy theo đúng comment mới nhất — cùng concurrency group với AC7.
+- [ ] AC9: Stage post-merge nhận định comment mới nhất là tín hiệu hài lòng/muốn chốt → dispatch
+  (`gh workflow run online-pipeline-finalize.yml -f slug={slug} -f issue_number={issue_number}`)
+  job `finalize` riêng — KHÔNG tự chạy logic finalize (update Project Knowledge/archive/đóng issue)
+  ngay trong job xử lý comment này. Nếu lệnh `gh workflow run` thất bại (lỗi kỹ thuật, không phải bị
+  cancel), coi là lỗi kỹ thuật của job xử lý comment, đi qua ATTEMPTS-retry hiện có — label
+  `online-pipeline-merged-awaiting-followup` vẫn giữ nguyên, người dùng có thể comment lại để job
+  thử lại.
+- [ ] AC10: Job `finalize` (dispatch ở AC9) chạy dưới đúng concurrency group chung
   `online-pipeline-finalize` hiện có (chia sẻ với `knowledge-init`, không phải group riêng theo
-  slug) — giữ nguyên toàn bộ bảo vệ race-condition giữa các feature khác nhau hiện có.
-- [ ] AC10: Job `finalize` (AC9) khi chạy xong: cập nhật Project Knowledge, chuyển `work/{slug}/`
+  slug) — giữ nguyên toàn bộ bảo vệ race-condition giữa các feature khác nhau hiện có. Job này nhận
+  `slug` và `issue_number` từ `workflow_dispatch` input (bước "Derive slug and check idempotency"
+  hiện tại, đang đọc `github.event.pull_request.head.ref`, được sửa để đọc từ
+  `github.event.inputs.*` khi trigger là `workflow_dispatch`). Job trong
+  `online-pipeline-implement.yml` thực hiện dispatch (AC9) có thêm quyền `actions: write` trong
+  khối `permissions:` của chính nó, dùng `GITHUB_TOKEN` mặc định.
+- [ ] AC11: Job `finalize` (AC10) khi chạy xong: cập nhật Project Knowledge, chuyển `work/{slug}/`
   vào `work/completed/{slug}/`, gỡ label `online-pipeline-merged-awaiting-followup` khỏi issue,
   post 1 comment xác nhận hoàn tất nói rõ "đã hoàn tất; nếu cần sửa thêm, tạo issue/feature mới",
-  rồi đóng issue.
-- [ ] AC11: Comment muộn tới SAU KHI `work/completed/{slug}` đã tồn tại (đã chốt, issue đã đóng,
+  rồi đóng issue (hành vi mới — finalize hiện tại không tự đóng issue).
+- [ ] AC12: Comment muộn tới SAU KHI `work/completed/{slug}` đã tồn tại (đã chốt, issue đã đóng,
   label đã gỡ) → bị `action=skip` ở AC3, không dispatch lại gì — dù issue bị mở lại hay comment vẫn
   cố ý được gửi tới.
-- [ ] AC12: Feature này chỉ áp dụng cho code PR merge SAU KHI deploy thay đổi này; không có xử lý
+- [ ] AC13: "Branch của round đang mở" được ghi nhớ bằng 1 dòng marker trong issue body
+  (`<!-- online-pipeline: active_branch=feature/r{N}-{slug} -->`, giống cách Slack marker
+  channel_id/thread_ts đã lưu metadata trong issue body). Marker **vắng mặt** = ngầm định round 1
+  (`feature/{slug}`) — stage `implement` gốc (round 1) KHÔNG cần sửa để viết marker này. Chỉ stage
+  post-merge (AC6, khi tạo round N≥2) viết/cập nhật marker này qua `gh issue edit`. Route
+  job/implement job đọc marker này (hoặc dùng `feature/{slug}` nếu vắng mặt) ở mọi nơi hiện đang
+  hardcode `feature/$SLUG` (kiểm tra branch tồn tại, checkout, đường dẫn status-file, `gh pr list
+  --head`).
+- [ ] AC14: Feature này chỉ áp dụng cho code PR merge SAU KHI deploy thay đổi này; không có xử lý
   hồi tố cho issue đã merge/đóng theo cơ chế finalize-tự-động cũ trước đó.
 
 ## Constraints
@@ -128,20 +166,23 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
   không phải keyword filter cứng trong bash — nhất quán với cách `implement-followup` đã làm.
 - Mỗi round PR mới dùng đúng label `userspec-implement` (để job set-label ở AC1 vẫn nhận ra); tên
   branch round N≥2 là `feature/r{N}-{slug}` — tiền tố `r{N}-` đặt ở ĐẦU, không phải cuối, để không
-  phá quy tắc hiện có "đoạn cuối cùng sau dấu `-` cuối của branch luôn là issue number". Round 1
-  giữ nguyên `feature/{slug}` như hiện tại.
+  phá quy tắc hiện có "đoạn cuối cùng sau dấu `-` cuối của branch luôn là issue number". **Round 1
+  giữ nguyên `feature/{slug}` như hiện tại — không đổi Naming Contract của stage `implement` gốc đã
+  chạy production.**
+- "Branch của round đang mở" không được tra bằng cách query động (`gh pr list` mỗi lần) — lưu 1
+  marker cố định trong issue body (AC13), chỉ stage post-merge cập nhật khi tạo round mới. Route
+  job/implement job luôn đọc marker này thay cho literal `feature/$SLUG`.
 - Job `finalize` KHÔNG tham gia concurrency group riêng theo slug
   (`online-pipeline-implement-{slug}`) — giữ nguyên group chung cố định toàn repo
   `online-pipeline-finalize` (chia sẻ với `knowledge-init`), để 2 feature khác nhau không cùng lúc
-  commit đè Project Knowledge trên `main`. Chỉ đổi TRIGGER của job này, từ `pull_request: closed`
-  sang `workflow_dispatch`.
+  commit đè Project Knowledge trên `main`. Đổi TRIGGER của job này từ `pull_request: closed` sang
+  `workflow_dispatch`, kèm sửa bước đọc slug/issue_number từ input (không còn PR event để tự parse).
 - State "đang chờ followup/chốt" lưu hoàn toàn trên label của issue, không lưu trên file
   status-marker của branch đã merge (branch có thể bị xoá sau merge, tuỳ GitHub setting hoặc hành
   động tay của người dùng — không có cơ chế nào trong repo đảm bảo branch còn tồn tại).
-  Status-marker trên branch `feature/r{N}-{slug}` của round N vẫn dùng y như
-  `implement`/`implement-followup` hiện có, chỉ trong phạm vi round đó đang chạy.
-  "Đã chốt xong" được đọc từ `work/completed/{slug}` tồn tại trên `main`, không từ label hay status
-  marker.
+  Status-marker trên branch của round đang chạy vẫn dùng y như `implement`/`implement-followup`
+  hiện có, chỉ trong phạm vi round đó đang chạy. "Đã chốt xong" được đọc từ `work/completed/{slug}`
+  tồn tại trên `main`, không từ label hay status marker.
 - Round mới không chạy lại interview `user-spec-planning`; vẫn đọc `user-spec.md` + `decisions.md`
   gốc của feature.
 - Chỉ áp dụng từ nay về sau; không migrate issue đã merge từ trước.
@@ -158,20 +199,25 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
   hoặc ngược lại, hiểu nhầm 1 câu hỏi-đáp thành yêu cầu sửa code và mở 1 PR round không cần thiết.
   **Mitigation:** Chấp nhận rủi ro này (agent-side judgment, không có keyword filter cứng để dựa
   vào). Giảm nhẹ: agent luôn trả lời lại qua comment ở mọi nhánh (không im lặng), và comment xác
-  nhận lúc chốt (AC10) luôn nói rõ "đã hoàn tất; nếu cần sửa thêm, tạo issue/feature mới" — nếu bị
+  nhận lúc chốt (AC11) luôn nói rõ "đã hoàn tất; nếu cần sửa thêm, tạo issue/feature mới" — nếu bị
   hiểu nhầm, người dùng biết ngay và có đường xử lý tiếp (tạo issue mới), không bị mất thông tin
   hoàn toàn.
-- **Risk 3:** `cancel-in-progress` huỷ đúng lúc 1 round đang push (AC7) — rủi ro tương tự Risk 2/4
-  của `implement-followup`, cùng mức độ chấp nhận (push chỉ xảy ra ở checkpoint cố định, không liên
-  tục; dùng chung concurrency group nên chỉ 1 job chạy/slug tại 1 thời điểm). Không áp dụng cho job
-  `finalize` (AC9) vì nó chạy trong group riêng, không cancel-in-progress — nên không có rủi ro
-  tương tự cho bước commit vào `main`.
+- **Risk 3:** `cancel-in-progress` huỷ đúng lúc 1 round đang push (AC7), hoặc đúng lúc agent đang
+  phân loại/vừa quyết định xong (AC8) — rủi ro tương tự Risk 2/4 của `implement-followup`, cùng mức
+  độ chấp nhận (push chỉ xảy ra ở checkpoint cố định, không liên tục; dùng chung concurrency group
+  nên chỉ 1 job chạy/slug tại 1 thời điểm). Không áp dụng cho job `finalize` (AC10) vì nó chạy trong
+  group riêng, không cancel-in-progress — nên không có rủi ro tương tự cho bước commit vào `main`.
 - **Risk 4:** Job set-label (AC1/AC2) thất bại thật sau khi hết retry, VÀ chính bước post comment
   báo lỗi kỹ thuật đó cũng thất bại (ví dụ mất mạng kéo dài) — issue bị kẹt không có label, không
   nhận followup tiếp, không có thông báo nào. **Mitigation:** Chấp nhận ở mức độ tương tự các rủi
   ro "accepted for v1" khác đã có trong `SKILL.md` (ví dụ double-failure case của Hybrid
   Local/Online Switch) — đây là double-failure hiếm, người dùng vẫn luôn thấy code đã merge thật
   trên GitHub dù không có label/comment, có thể tự nhận ra và báo cáo.
+- **Risk 5:** `gh workflow run` dispatch finalize (AC9) thất bại thật (không phải do cancel) — issue
+  vẫn giữ label `online-pipeline-merged-awaiting-followup`, không bị mất trạng thái.
+  **Mitigation:** Coi là lỗi kỹ thuật thông thường của job xử lý comment, đi qua ATTEMPTS-retry hiện
+  có; nếu vẫn thất bại sau khi hết retry, job báo lỗi qua comment giống các lỗi kỹ thuật khác của
+  stage này — người dùng có thể comment lại (ví dụ lặp lại tín hiệu "chốt") để thử dispatch lại.
 
 ## Accepted Decisions
 - Tách job set-label (bash thuần, nghe event `pull_request: closed`) khỏi job `finalize` thật
@@ -180,14 +226,29 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
   chung toàn repo để đảm bảo không có 2 lần finalize của 2 feature khác nhau cùng commit đè lên
   Project Knowledge trên `main` tại 1 thời điểm; nếu finalize chạy trong group riêng theo slug (như
   mọi round khác), bảo vệ này mất hoàn toàn. Giữ finalize là 1 job riêng dưới group chung hiện có,
-  chỉ đổi trigger, bảo toàn được bảo vệ này mà vẫn đạt đúng mục tiêu "finalize do agent tự nhận định
-  từ comment, không còn gắn với event merge".
+  chỉ đổi trigger (kèm sửa bước đọc slug/issue_number từ `workflow_dispatch` input, vì
+  `github.event.pull_request.head.ref` không còn tồn tại dưới trigger mới), bảo toàn được bảo vệ
+  này mà vẫn đạt đúng mục tiêu "finalize do agent tự nhận định từ comment, không còn gắn với event
+  merge". Job dispatch cần thêm quyền `actions: write`, dùng `GITHUB_TOKEN` mặc định (không cần PAT
+  mới).
 - Branch round N≥2 đặt tên `feature/r{N}-{slug}` (tiền tố `r{N}-` ở ĐẦU), không phải
   `feature/{slug}-{N}` (hậu tố ở cuối) — vì `slug` luôn có dạng `kebab-title-{issueNumber}`, và cơ
-  chế hiện có (job set-label ở AC1, cũng như mọi nơi khác trong `SKILL.md`) suy ra issue number
-  bằng cách lấy đúng đoạn cuối cùng sau dấu `-` cuối của tên branch. Thêm hậu tố sẽ làm sai lệch
-  issue number suy ra được cho mọi round ≥2; thêm tiền tố ở đầu giữ nguyên quy tắc đó vì không đổi
-  đoạn cuối cùng.
+  chế hiện có suy ra issue number bằng cách lấy đúng đoạn cuối cùng sau dấu `-` cuối của tên branch.
+  Thêm hậu tố sẽ làm sai lệch issue number suy ra được cho mọi round ≥2; thêm tiền tố ở đầu giữ
+  nguyên quy tắc đó.
+- **Round 1 giữ nguyên tên `feature/{slug}` (không tiền tố), không đổi thành `feature/r1-{slug}`** —
+  dù việc đồng nhất mọi round cùng 1 công thức tên có vẻ gọn hơn, làm vậy đồng nghĩa phải sửa cả
+  bước tạo branch của stage `implement` gốc đã chạy production (Naming Contract hiện có trong
+  `SKILL.md`, dùng xuyên suốt 3 stage `implement`/`implement-resume`/`implement-followup` + các bản
+  vendored) — vượt phạm vi "chỉ thêm followup sau merge" của feature này. Thay vào đó, công thức
+  tính N (AC6) tự tính cả round 1 (khớp `feature/{slug}` KHÔNG tiền tố, HOẶC `feature/r*-{slug}`)
+  nên lần sửa thêm đầu tiên vẫn luôn ra round 2 đúng như mong đợi, mà không cần đổi gì ở stage gốc.
+- "Branch của round đang mở" lưu bằng 1 marker trong issue BODY (không phải query `gh pr list` động
+  mỗi lần) — vì (a) `gh pr list --head` không hỗ trợ glob nên không thể query trực tiếp theo pattern
+  `feature/r*-{slug}`, phải liệt kê hết rồi lọc phía client, tốn thêm 1 lệnh mỗi lần route job chạy;
+  (b) lưu trực tiếp trên issue (giống cách Slack marker đã lưu channel_id/thread_ts) đơn giản hơn,
+  chỉ cần đọc issue body có sẵn trong mọi context. Marker vắng mặt ngầm định round 1 — nên KHÔNG cần
+  sửa gì ở stage `implement` gốc; chỉ stage post-merge (tạo round N≥2) mới cần viết marker này.
 - Không tạo giá trị status-marker mới hay file state mới cho "đang chờ followup/chốt" — dùng 1
   label trên issue. Lý do: status-marker hiện có sống trên file của chính branch đã merge; không có
   gì trong repo đảm bảo branch đó còn tồn tại sau merge (không có bước `--delete-branch` hay cấu
@@ -201,12 +262,20 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
   mọi nhận định nội dung nằm trong `claude -p` (giống lý do đã chọn cho `implement-followup`).
   Không có lệnh tường minh kiểu `/finalize` — người dùng chỉ cần comment tự nhiên.
   Việc nhận định sai được chấp nhận là rủi ro (xem Risk 2), không build thêm bước xác nhận 2 lần.
+- `cancel-in-progress` áp dụng cho CẢ giai đoạn agent đang phân loại comment (trước khi tạo round
+  mới hoặc dispatch finalize) VÀ giai đoạn round đã có branch/PR đang mở — nhất quán nguyên tắc
+  "ưu tiên comment mới nhất" áp dụng cho toàn bộ feature, không chỉ 1 giai đoạn.
 - Round mới không chạy lại interview `user-spec-planning` — chỉ đọc lại `user-spec.md` +
   `decisions.md` gốc, coi comment là yêu cầu bổ sung trên cùng 1 feature, nhất quán với cách
   `implement-followup` đã xử lý comment trong lúc PR còn mở.
-- N (số round) tính qua đếm số PR đã từng mở khớp pattern `feature/r*-{slug}` (+1), không lưu
-  counter riêng ở đâu — tránh thêm 1 nguồn state mới có thể lệch khỏi GitHub thật; PR history trên
-  GitHub vẫn còn dù branch có bị xoá hay không.
+- N (số round) tính qua liệt kê (`gh pr list --state all --json headRefName`, không dùng `--head`
+  vì không hỗ trợ glob) rồi lọc client-side theo pattern, không lưu counter riêng ở đâu — tránh thêm
+  1 nguồn state mới có thể lệch khỏi GitHub thật; PR history trên GitHub vẫn còn dù branch có bị
+  xoá hay không.
+- Finalize (AC11) tự đóng issue khi hoàn tất — khác với hành vi hiện tại của `online-pipeline-
+  finalize.yml` (không tự đóng issue, xem Why/Expected Behavior bước 8). Đây là 1 cải tiến đi kèm,
+  không phải giữ nguyên hành vi cũ, vì feature này cần 1 tín hiệu kết thúc rõ ràng để AC12 (chặn
+  comment muộn) có ý nghĩa quan sát được trên GitHub, không chỉ ở tầng dữ liệu nội bộ.
 - Chỉ áp dụng từ nay về sau — không migrate issue đã merge theo cơ chế finalize-tự-động cũ. 1 issue
   đã đóng/đã archive trước khi deploy thay đổi này giữ nguyên trạng thái, không được "mở lại" bởi
   feature này.
@@ -214,15 +283,15 @@ cuộc hội thoại trên issue, thay vì buộc phải mở issue mới mỗi 
 ## Testing
 
 **Unit tests:** không áp dụng được — toàn bộ thay đổi là bash trong workflow YAML (route job, label,
-concurrency, trigger của job finalize) và hướng dẫn agent trong `SKILL.md`, không có logic ứng dụng
-mới để unit-test.
+marker trong issue body, concurrency, trigger của job finalize) và hướng dẫn agent trong `SKILL.md`,
+không có logic ứng dụng mới để unit-test.
 
 **Integration tests:** không áp dụng được theo nghĩa test tự động — không có harness CI nào mô
 phỏng GitHub Actions + Slack Worker trong repo này.
 
 **E2E tests:** cần, nhưng thủ công — xem Verification bên dưới (dry-run thực tế trên 1 repo đã bật
-online-pipeline), vì đây là cách duy nhất verify được route job/label/concurrency/dispatch thật trên
-GitHub Actions.
+online-pipeline), vì đây là cách duy nhất verify được route job/label/marker/concurrency/dispatch
+thật trên GitHub Actions.
 
 ## Verification
 
@@ -230,28 +299,33 @@ GitHub Actions.
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Review diff của `online-pipeline-finalize.yml`: job set-label (nghe `pull_request: closed`, có retry, không gọi `claude -p`) tách biệt với job finalize thật (trigger đổi sang `workflow_dispatch`, giữ nguyên concurrency group cũ, logic cũ + bước gỡ label) | 2 job tách biệt rõ ràng, không job nào vừa set label vừa chạy finalize; job finalize thật không có thay đổi gì khác ngoài trigger + bước gỡ label; concurrency group của job finalize thật không đổi so với bản gốc. |
-| 2. Review diff của `online-pipeline-implement.yml`: route job thêm check `work/completed/{slug}` (AC3) trước khi xét label (AC4), và stage post-merge mới (AC5/AC6/AC8) | Thứ tự check đúng (completed trước label); nhánh "yêu cầu sửa thêm" dùng đúng tên branch `feature/r{N}-{slug}` (không phải `feature/{slug}-{N}`); nhánh "chốt" chỉ gọi `gh workflow run`, không có đoạn nào tự chạy logic finalize/archive/đóng issue trong chính job này. |
-| 3. Review hướng dẫn agent trong `SKILL.md` cho stage post-merge (3 nhánh phân loại) | Hướng dẫn rõ: agent tự nhận định, không có keyword filter cứng; nhánh sửa-thêm đọc lại `user-spec.md`/`decisions.md` gốc, không chạy lại interview; nhánh chốt chỉ dispatch, không tự archive. |
+| 1. Review diff của `online-pipeline-finalize.yml`: job set-label (nghe `pull_request: closed`, có retry, không gọi `claude -p`) tách biệt với job finalize thật (trigger đổi sang `workflow_dispatch`, bước đọc slug/issue_number đổi sang đọc từ input, giữ nguyên concurrency group cũ, logic cũ + bước gỡ label + bước đóng issue) | 2 job tách biệt rõ ràng; job finalize thật không còn đọc `github.event.pull_request.head.ref`; concurrency group của job finalize thật không đổi so với bản gốc. |
+| 2. Review diff của `online-pipeline-implement.yml`: route job thêm check `work/completed/{slug}` (AC3), đọc marker `active_branch` từ issue body thay cho literal `feature/$SLUG` (AC13), thêm quyền `actions: write` cho job dispatch (AC10), và stage post-merge mới (AC5/AC6/AC8/AC9) | Thứ tự check đúng (completed trước label); nhánh "yêu cầu sửa thêm" dùng đúng công thức tính N (tính cả round 1) và tên branch `feature/r{N}-{slug}`; nhánh "chốt" chỉ gọi `gh workflow run` kèm slug/issue_number, không có đoạn nào tự chạy logic finalize/archive/đóng issue trong chính job này; mọi nơi trước đây hardcode `feature/$SLUG` để ls-remote/checkout/tra PR đã đổi sang đọc marker (mặc định `feature/{slug}` nếu vắng mặt). |
+| 3. Review hướng dẫn agent trong `SKILL.md` cho stage post-merge (3 nhánh phân loại) và cập nhật Naming Contract (marker `active_branch`, branch pattern `feature/r{N}-{slug}`) | Hướng dẫn rõ: agent tự nhận định, không có keyword filter cứng; nhánh sửa-thêm đọc lại `user-spec.md`/`decisions.md` gốc, không chạy lại interview, tự ghi marker; nhánh chốt chỉ dispatch, không tự archive; `implement-resume`/`implement-followup` trong `SKILL.md` không còn giả định cứng `feature/{slug}` mà dẫn chiếu marker. |
 | 4. Review đồng bộ vendored copies (`skills/project-initialization/assets/new-project/.github/workflows/`, mirror `.codex/`) | Nội dung khớp với bản nguồn trong `skills/online-pipeline/`, theo đúng "Setup Script Maintenance". |
 | 5. Kiểm tra YAML hợp lệ (`actionlint`/`yamllint` nếu có sẵn, hoặc ít nhất parse YAML) | Không có lỗi cú pháp trong các file workflow đã sửa. |
 
 ### User Verification
-- Dry-run thực tế trên 1 repo đã bật online-pipeline (route job/concurrency/label/dispatch thật của
-  GitHub Actions không thể verify được bằng code review hay unit test): tạo issue → qua spec →
-  implement → code PR round 1 mở → merge → xác nhận (a) finalize KHÔNG tự chạy, issue vẫn mở, label
-  `online-pipeline-merged-awaiting-followup` xuất hiện.
+- Dry-run thực tế trên 1 repo đã bật online-pipeline (route job/concurrency/label/marker/dispatch
+  thật của GitHub Actions không thể verify được bằng code review hay unit test): tạo issue → qua
+  spec → implement → code PR round 1 mở (`feature/{slug}`) → merge → xác nhận (a) finalize KHÔNG tự
+  chạy, issue vẫn mở, label `online-pipeline-merged-awaiting-followup` xuất hiện.
 - Comment hỏi-đáp (ví dụ hỏi về deploy repo đích) → xác nhận (b) agent trả lời ngắn, không tạo
   branch/PR mới, label không đổi.
-- Comment yêu cầu sửa thêm → xác nhận (c) PR round 2 mở từ `main` với tên `feature/r2-{slug}`, label
-  `userspec-implement`, label merged-awaiting-followup đã bị gỡ; gửi tiếp 1 comment khác ngay trong
-  lúc round 2 đang chạy → xác nhận (d) job cũ bị huỷ, job mới chạy theo yêu cầu mới nhất
-  (cancel-in-progress, giống cơ chế implement-followup).
-- Merge PR round 2 → xác nhận (e) label được set lại.
-- Comment mang tín hiệu hài lòng ("ok vậy là xong, cảm ơn") → xác nhận (f) job finalize thật được
-  dispatch và chạy: Project Knowledge cập nhật, `work/{slug}/` chuyển vào `work/completed/{slug}/`,
-  label bị gỡ, issue đóng, có comment xác nhận hoàn tất nói rõ "cần sửa thêm phải tạo issue mới".
-- Gửi 1 comment muộn sau khi đã chốt (mở lại issue nếu cần để gửi được comment) → xác nhận (g)
-  không có gì được dispatch lại (AC11).
+- Comment yêu cầu sửa thêm → xác nhận (c) PR round 2 mở từ `main` với tên `feature/r2-{slug}`,
+  label `userspec-implement`, label merged-awaiting-followup đã bị gỡ, marker `active_branch` trong
+  issue body được cập nhật thành branch mới; gửi tiếp 1 comment khác ngay trong lúc round 2 đang
+  chạy → xác nhận (d) job cũ bị huỷ, job mới chạy theo yêu cầu mới nhất (cancel-in-progress).
+- Merge PR round 2 → xác nhận (e) label được set lại đúng issue (vẫn suy ra đúng issue number dù
+  branch có tiền tố `r2-`).
+- Gửi 2 comment liên tiếp rất nhanh ngay sau khi merge (trước khi job phân loại đầu kịp xong) → xác
+  nhận (f) job phân loại đầu bị huỷ, chỉ job theo comment thứ 2 chạy tiếp (AC8).
+- Comment mang tín hiệu hài lòng ("ok vậy là xong, cảm ơn") → xác nhận (g) job finalize thật được
+  dispatch (`gh workflow run`) và chạy: Project Knowledge cập nhật, `work/{slug}/` chuyển vào
+  `work/completed/{slug}/`, label bị gỡ, **issue đóng**, có comment xác nhận hoàn tất nói rõ "cần
+  sửa thêm phải tạo issue mới".
+- Gửi 1 comment muộn sau khi đã chốt (mở lại issue nếu cần để gửi được comment) → xác nhận (h)
+  không có gì được dispatch lại (AC12).
 - Cần verify thủ công vì đây là hành vi thời gian thực của GitHub Actions concurrency + label +
-  workflow_dispatch, không tái tạo được trong môi trường local/CI của repo này.
+  issue-body marker + `workflow_dispatch`, không tái tạo được trong môi trường local/CI của repo
+  này.

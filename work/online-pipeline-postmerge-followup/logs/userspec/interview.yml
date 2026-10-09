@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-09 00:00:00"
-  last_updated: "2026-10-09 01:30:00"
+  last_updated: "2026-10-09 02:00:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -121,6 +121,40 @@ conversation_history:
       2. ok
       3. ok
       4. ok
+
+  - asked_at: "2026-10-09 02:00:00"
+    topic_keys: ["technical_decisions", "edge_cases", "data_requirements", "integration_points", "acceptance_criteria"]
+    agent_questions: |
+      3 reviewer (quality/adequacy/skeptic) chạy round 1 validation, tìm thêm 5 vấn đề (3 critical/
+      major cần quyết định, 2 local tự sửa):
+      1. Route job + implement job + SKILL.md hiện tại giả định cứng 1 tên branch feature/$SLUG ở
+         khắp nơi (ls-remote, checkout, status-file path, gh pr list --head) — không tương thích
+         với branch round N≥2 khác tên. Cần 1 cách để các job này biết "branch của round đang mở
+         là branch nào".
+      2. Dưới workflow_dispatch, job finalize không còn github.event.pull_request.head.ref để đọc
+         slug như hiện tại — phải nhận slug qua input khi job xử lý comment dispatch nó.
+      3. gh workflow run cần quyền actions: write — job dispatch hiện chưa có.
+      4. AC6 (bản nháp) chỉ đếm PR có tiền tố r*-, bỏ sót round 1 (feature/{slug} không tiền tố) →
+         lần sửa đầu tiên tính ra r1, mâu thuẫn với phần Verification đang viết r2.
+      5. AC7 (bản nháp) chỉ định nghĩa cancel-in-progress cho lúc ĐÃ có round-branch; chưa định
+         nghĩa cho lúc agent đang phân loại comment (trước khi round mới được tạo).
+    user_answer: |
+      Q1: Đề xuất ban đầu (gh pr list --state open động) → user đề xuất thay bằng lưu 1 marker
+      "active_branch" trong issue body (giống Slack marker), update mỗi khi tạo round mới. Agent
+      xác nhận: marker vắng mặt = ngầm định round 1 (feature/{slug}), không cần sửa gì ở stage
+      implement gốc; chỉ stage post-merge (tạo round N≥2) mới cần viết marker này. Route
+      job/implement job/SKILL.md đọc marker này (mặc định feature/{slug} nếu vắng mặt) thay cho
+      literal feature/$SLUG. Đồng ý.
+      Q2: Agent giải thích lý do cần đọc slug (để biết archive đúng work/{slug}, đóng đúng issue).
+      User: ok, xác nhận cần truyền slug/issue_number qua workflow_dispatch input.
+      Q3: ok, thêm actions: write vào job dispatch, dùng GITHUB_TOKEN mặc định.
+      Q4: User ban đầu đề xuất đổi CẢ round 1 thành feature/r1-{slug} (đồng nhất mọi round). Agent
+      chỉ ra hệ quả: điều này đổi luôn Naming Contract của stage `implement` gốc đã chạy production
+      (vượt phạm vi feature này), và đề xuất phương án (A) giữ round 1 là feature/{slug} không đổi,
+      chỉ sửa công thức đếm N để tính cả round 1 (khớp feature/{slug} HOẶC feature/r*-{slug}, +1).
+      User chọn phương án (A): "Ok a đi."
+      Q5: ok, áp dụng cancel-in-progress cho cả lúc đang phân loại comment (trước khi có
+      round-branch), nhất quán với nguyên tắc ưu tiên comment mới nhất.
 
 general_understanding:
   feature_name:
@@ -367,16 +401,39 @@ user_experience:
       - Nhận định hỏi-đáp/sửa-thêm/chốt là agent-side judgment trong claude -p, không phải keyword
         filter cứng trong bash (nhất quán với implement-followup's Accepted Decisions).
       - Round mới: branch feature/r{N}-{slug} (N≥2; round 1 giữ nguyên feature/{slug}, không tiền
-        tố) — tiền tố rN- đặt ở ĐẦU tên branch để không phá quy tắc hiện có "đoạn cuối cùng sau dấu
-        '-' cuối của branch luôn là issue number". N = số PR round đã từng mở khớp pattern (đếm qua
-        gh pr list, không lưu counter riêng).
+        tố — KHÔNG đổi Naming Contract của stage implement gốc đã chạy production) — tiền tố rN-
+        đặt ở ĐẦU tên branch để không phá quy tắc hiện có "đoạn cuối cùng sau dấu '-' cuối của
+        branch luôn là issue number". N = (số PR đã từng mở cho slug này khớp feature/{slug} HOẶC
+        feature/r*-{slug}, đếm qua gh pr list --state all --json headRefName rồi lọc bằng
+        regex/jq phía client — gh pr list --head KHÔNG hỗ trợ glob nên không query trực tiếp được)
+        + 1. Công thức này tính cả round 1 (không tiền tố) nên lần sửa thêm đầu tiên luôn ra round 2
+        (feature/r2-{slug}), nhất quán với Verification.
       - Round N+1 PR giữ nguyên label userspec-implement để job merge-listener vẫn nhận diện được.
+      - "Branch của round đang mở" được route job/implement job/SKILL.md đọc từ 1 marker trong issue
+        BODY (không phải query gh pr list động mỗi lần) — dạng 1 dòng
+        `<!-- online-pipeline: active_branch=feature/r{N}-{slug} -->`, giống cách Slack marker
+        (channel_id/thread_ts) đã lưu metadata trong issue body. Marker VẮNG MẶT = ngầm định round 1
+        (feature/{slug}) — nên KHÔNG cần sửa gì ở stage implement gốc (round 1 không viết marker
+        này); chỉ stage post-merge (khi tạo round N≥2) mới viết/cập nhật marker này (qua
+        gh issue edit). Route job dùng giá trị marker (hoặc default feature/{slug} nếu vắng mặt)
+        thay cho literal feature/$SLUG ở mọi nơi hiện đang hardcode (ls-remote, checkout,
+        status-file path, gh pr list --head).
       - Route job tự check work/completed/{slug} đã tồn tại trên main chưa trước khi dispatch bất
         kỳ action post-merge nào — nếu đã tồn tại, action=skip (idempotency, phòng hờ label lỡ
         chưa gỡ kịp).
+      - Job finalize nhận slug + issue_number qua workflow_dispatch input (gh workflow run
+        online-pipeline-finalize.yml -f slug=... -f issue_number=...) — bước "Derive slug and check
+        idempotency" hiện tại (đọc github.event.pull_request.head.ref) được sửa thành đọc từ
+        github.event.inputs.* khi trigger là workflow_dispatch; đây là 1 thay đổi logic thật, không
+        chỉ đổi dòng on:.
+      - Job trong online-pipeline-implement.yml thực hiện dispatch (gh workflow run) cần thêm quyền
+        actions: write vào khối permissions: của chính job đó, dùng GITHUB_TOKEN mặc định (không
+        cần PAT mới).
       - Dùng chung concurrency group online-pipeline-implement-{slug} cho mọi round + job xử lý
-        comment sau merge (cancel-in-progress chỉ bật cho action tương đương followup, giữ nguyên
-        quy tắc hiện có) — KHÔNG áp dụng group này cho job finalize (xem trên).
+        comment sau merge; cancel-in-progress áp dụng cho CẢ lúc đang phân loại comment (trước khi
+        có round-branch, agent đang quyết định hỏi-đáp/sửa/chốt) VÀ lúc round đã có branch/PR đang
+        mở — nhất quán nguyên tắc "ưu tiên comment mới nhất" trong toàn bộ feature. KHÔNG áp dụng
+        group/cancel-in-progress này cho job finalize (xem trên).
       - Round mới không chạy lại interview user-spec-planning; vẫn đọc user-spec.md + decisions.md
         gốc.
       - Chỉ áp dụng từ nay về sau, không migrate issue cũ.
@@ -443,14 +500,20 @@ integration:
     required: false
 
   data_requirements:
-    score: 90
+    score: 95
     value: |
-      State "đang chờ followup/chốt" lưu hoàn toàn trên label của issue
-      (online-pipeline-merged-awaiting-followup), không lưu trên file status-marker của branch đã
-      merge (vì branch có thể bị xoá sau merge). Status marker trên branch feature/r{N}-{slug} vẫn
-      dùng y như implement/implement-followup hiện có, chỉ trong phạm vi round đó đang chạy. Việc
-      "đã chốt xong" được đọc từ work/completed/{slug} trên main (idempotency), không từ label hay
-      status marker.
+      - State "đang chờ followup/chốt" lưu trên label của issue (online-pipeline-merged-
+        awaiting-followup), không lưu trên file status-marker của branch đã merge (branch có thể
+        bị xoá sau merge).
+      - "Branch của round đang mở" lưu trên 1 marker trong issue BODY
+        (active_branch=feature/r{N}-{slug}, giống cách Slack marker lưu channel_id/thread_ts) —
+        vắng mặt = ngầm định round 1 (feature/{slug}). Chỉ stage post-merge viết marker này khi tạo
+        round N≥2; stage implement gốc (round 1) không cần sửa.
+      - Status marker trên branch của round đang chạy vẫn dùng y như implement/implement-followup
+        hiện có, chỉ trong phạm vi round đó.
+      - "Đã chốt xong" đọc từ work/completed/{slug} trên main (idempotency), không từ label/marker.
+      - Job finalize nhận slug + issue_number qua workflow_dispatch input, không tự parse từ PR
+        event (không còn tồn tại dưới trigger này).
     gaps: []
     required: false
 
