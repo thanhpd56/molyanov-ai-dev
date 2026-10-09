@@ -158,8 +158,15 @@ jobs:
           sed -i 's/^status: draft$/status: approved/' "work/$SLUG/user-spec.md"
           sed -i 's/status: "in_progress"/status: "completed"/' "work/$SLUG/logs/userspec/interview.yml"
           git add "work/$SLUG/user-spec.md" "work/$SLUG/logs/userspec/interview.yml"
-          git commit -m "chore(userspec): approve user-spec for $SLUG"
-          git push origin "HEAD:$BRANCH"
+          # A prior /approve run on this same PR may have already committed+pushed this exact
+          # change and only failed on the next step (e.g. "Merge the spec PR" hitting GitHub's
+          # transient "Base branch was modified" race) — re-running then finds nothing left to
+          # stage, since the checkout already has the approved commit. Skip straight to the merge
+          # retry instead of letting an empty `git commit` fail the whole job again.
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(userspec): approve user-spec for $SLUG"
+            git push origin "HEAD:$BRANCH"
+          fi
 
       - name: Merge the spec PR
         env:
