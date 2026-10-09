@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-09 00:00:00"
-  last_updated: "2026-10-09 02:00:00"
+  last_updated: "2026-10-09 02:30:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -155,6 +155,20 @@ conversation_history:
       User chọn phương án (A): "Ok a đi."
       Q5: ok, áp dụng cancel-in-progress cho cả lúc đang phân loại comment (trước khi có
       round-branch), nhất quán với nguyên tắc ưu tiên comment mới nhất.
+
+  - asked_at: "2026-10-09 02:30:00"
+    topic_keys: ["technical_decisions", "edge_cases", "acceptance_criteria"]
+    agent_questions: |
+      Validation round 2 (3 reviewer): hầu hết là lỗi kỹ thuật cục bộ tự sửa (mở rộng đúng phạm vi
+      marker active_branch ra hết các chỗ hardcode còn sót trong implement job + SKILL.md đúng như
+      đã đồng ý ở Q1 vòng trước; thêm --limit cho lệnh đếm round; sửa biểu thức cancel-in-progress
+      để bao gồm cả action post-merge; sửa câu chữ status-file path). Riêng 1 điểm cần quyết định:
+      AC6 gỡ label online-pipeline-merged-awaiting-followup NGAY TỪ ĐẦU khi tạo round mới, trước khi
+      branch/PR/marker mới tạo xong — nếu bước sau thất bại thật, issue bị kẹt không có label,
+      không có round mới hợp lệ, không tự phục hồi được. Đề xuất: chỉ gỡ label SAU KHI branch+PR+
+      marker đã tạo xong thành công (giữ label ổn định tới khi chắc chắn, giống cách nhánh "chốt"
+      AC9 đang làm).
+    user_answer: "ok"
 
 general_understanding:
   feature_name:
