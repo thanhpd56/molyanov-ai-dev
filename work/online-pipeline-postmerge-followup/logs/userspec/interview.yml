@@ -3,7 +3,7 @@
 
 interview_metadata:
   started: "2026-10-09 00:00:00"
-  last_updated: "2026-10-09 02:30:00"
+  last_updated: "2026-10-09 03:00:00"
   status: "completed"  # in_progress | completed
   can_resume: true
 
@@ -169,6 +169,22 @@ conversation_history:
       marker đã tạo xong thành công (giữ label ổn định tới khi chắc chắn, giống cách nhánh "chốt"
       AC9 đang làm).
     user_answer: "ok"
+
+  - asked_at: "2026-10-09 03:00:00"
+    topic_keys: ["technical_decisions", "edge_cases", "acceptance_criteria", "integration_points"]
+    agent_questions: |
+      Validation round 3 (3 reviewer, round cuối theo quy trình): 2 lỗi local tự sửa (AC1 thiếu
+      bước defensive-create label mới trước khi áp dụng — label `online-pipeline-merged-
+      awaiting-followup` sẽ fail lần đầu ở repo đã setup online-pipeline từ trước, đúng pattern
+      các label khác đang defensive-create; câu chữ sai về cách `.codex/` được đồng bộ — thực ra
+      qua pre-commit hook + bước gọi trong finalize, không phải "Setup Script Maintenance"). Có 1
+      phát hiện mới cần quyết định: mục "Hybrid Local/Online Switch" trong SKILL.md (chuyển feature
+      giữa local ↔ online) cũng hardcode feature/{slug} cho cùng mục đích xác định branch (case 3
+      mid-implement, "Comment failure and revert", switch-to-local step 2) — nếu switch đúng lúc
+      round N≥2 đang mở sẽ nhắm nhầm branch cũ đã merge/đã xoá. 2 lựa chọn: (A) ghi nhận là hạn chế
+      đã biết, không sửa gì; (B) sửa luôn Hybrid Switch để đọc marker active_branch thay cho
+      literal feature/{slug}.
+    user_answer: "b (mở rộng fix sang Hybrid Local/Online Switch)"
 
 general_understanding:
   feature_name:

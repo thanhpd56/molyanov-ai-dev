@@ -101,10 +101,14 @@ phải follow-up của PR cũ." Feature này đảo lại quyết định đó: 
 
 ## Acceptance Criteria
 - [ ] AC1: Khi 1 code PR (label `userspec-implement`, branch `feature/{slug}` hoặc
-  `feature/r{N}-{slug}`) merge, 1 job bash thuần (không gọi `claude -p`) set label
-  `online-pipeline-merged-awaiting-followup` trên đúng issue, suy ra issue number từ tên branch
-  bằng quy tắc hiện có (đoạn cuối cùng sau dấu `-` cuối) — không bị ảnh hưởng bởi tiền tố `r{N}-`.
-  Job này **không** chạy `claude -p`, không đóng issue, không chạy finalize.
+  `feature/r{N}-{slug}`) merge, 1 job bash thuần (không gọi `claude -p`) **tự tạo label
+  `online-pipeline-merged-awaiting-followup` nếu chưa tồn tại** (defensive-create, đúng pattern
+  đã dùng cho `userspec-spec`/`userspec-implement`/`local-placeholder`/`knowledge-init` —
+  bắt buộc vì đây là label MỚI, kể cả repo đã chạy `setup-online-pipeline.sh` từ trước khi deploy
+  feature này cũng chưa có sẵn, và `gh` fail nếu set label chưa tồn tại), rồi set label đó trên
+  đúng issue, suy ra issue number từ tên branch bằng quy tắc hiện có (đoạn cuối cùng sau dấu `-`
+  cuối) — không bị ảnh hưởng bởi tiền tố `r{N}-`. Job này **không** chạy `claude -p`, không đóng
+  issue, không chạy finalize.
 - [ ] AC2: Nếu lệnh `gh api` set label ở AC1 thất bại (lỗi tạm thời), job tự retry tối đa 3 lần
   trong cùng lần chạy; nếu vẫn thất bại sau khi hết retry, post 1 comment báo lỗi kỹ thuật lên issue
   qua `gh issue comment` (không có label, issue tạm không nhận followup tiếp — đây là tín hiệu để
@@ -183,6 +187,12 @@ phải follow-up của PR cũ." Feature này đảo lại quyết định đó: 
   khi đọc/ghi file này.
 - [ ] AC14: Feature này chỉ áp dụng cho code PR merge SAU KHI deploy thay đổi này; không có xử lý
   hồi tố cho issue đã merge/đóng theo cơ chế finalize-tự-động cũ trước đó.
+- [ ] AC15: Mục "Hybrid Local/Online Switch" trong `SKILL.md` — case 3 (mid-implement), subsection
+  "Comment failure and revert", và Switch-to-local bước 2 — đọc marker `active_branch` (AC13, mặc
+  định `feature/{slug}` nếu vắng mặt) thay cho literal `feature/{slug}` ở mọi nơi hiện dùng để
+  kiểm tra branch tồn tại, đọc/ghi status marker trên branch đó, push, hoặc xoá branch. Nhờ đó,
+  switch-to-local/switch-to-online vẫn nhắm đúng branch dù feature đang ở round nào (round 1 hay
+  round N≥2 đang mở online).
 
 ## Constraints
 - Việc set label `online-pipeline-merged-awaiting-followup` là bash thuần (có retry), không gọi
@@ -219,8 +229,16 @@ phải follow-up của PR cũ." Feature này đảo lại quyết định đó: 
 - Round mới không chạy lại interview `user-spec-planning`; vẫn đọc `user-spec.md` + `decisions.md`
   gốc của feature.
 - Chỉ áp dụng từ nay về sau; không migrate issue đã merge từ trước.
-- Thay đổi phải đồng bộ sang các bản vendored (scaffold `project-initialization`, mirror `.codex/`)
-  theo đúng "Setup Script Maintenance" đã có trong `SKILL.md`.
+- Thay đổi phải đồng bộ sang bản vendored scaffold `project-initialization` theo đúng "Setup Script
+  Maintenance" đã có trong `SKILL.md` (copy tay các file workflow đã sửa). Mirror `.codex/` KHÔNG
+  theo cơ chế này — nó được đồng bộ tự động qua `.githooks/pre-commit` (chạy `sync-to-codex.sh
+  --apply` mỗi lần commit đụng `skills/`) và qua lệnh gọi trực tiếp trong stage `finalize`; không
+  cần hành động thủ công riêng cho `.codex/`.
+- Mục "Hybrid Local/Online Switch" trong `SKILL.md` (case 3 mid-implement, "Comment failure and
+  revert", Switch-to-local bước 2) cũng hardcode `feature/{slug}` cho cùng mục đích xác định
+  branch — phải đọc marker `active_branch` (AC13) thay cho literal này ở mọi nơi dùng để kiểm tra
+  tồn tại/đọc-ghi status marker/push/xoá branch, để switch local↔online vẫn đúng dù feature đang ở
+  round nào (xem AC15).
 
 ## Risks
 - **Risk 1:** Số round không giới hạn có thể chạy vô hạn, tốn CI minutes/Claude usage.
@@ -300,6 +318,17 @@ phải follow-up của PR cũ." Feature này đảo lại quyết định đó: 
 - Lệnh đếm round (AC6) thêm `--limit` tường minh (ví dụ 1000) cho `gh pr list --state all` — vì
   `gh pr list` mặc định chỉ trả về 30 kết quả, có thể đếm thiếu round cho 1 feature có nhiều round
   hoặc 1 repo có nhiều PR khác.
+- Marker `active_branch` cũng được áp dụng cho mục "Hybrid Local/Online Switch" (AC15) — không chỉ
+  route job/implement job/SKILL.md stage prompts — vì mục này hardcode `feature/{slug}` cho đúng
+  mục đích "xác định branch hiện tại của feature" mà marker này giải quyết; để switch local↔online
+  vẫn đúng khi feature đang ở round N≥2. Đây là lần mở rộng phạm vi thứ 2 của cùng 1 nguyên tắc đã
+  thống nhất (đọc marker thay literal ở MỌI nơi dùng cho mục đích xác định branch), không phải 1
+  quyết định mới về bản chất.
+- Label mới `online-pipeline-merged-awaiting-followup` (AC1) được defensive-create (tạo nếu chưa
+  tồn tại) ngay trong job set-label — không cần 1 bước setup/migration riêng cho repo đã onboard
+  online-pipeline từ trước, nhất quán với cách các label khác (`userspec-spec`,
+  `userspec-implement`, `local-placeholder`, `knowledge-init`) đã luôn defensive-create tại điểm
+  dùng, theo đúng precedent đã ghi trong `setup-online-pipeline.sh`.
 - Không tạo giá trị status-marker mới hay file state mới cho "đang chờ followup/chốt" — dùng 1
   label trên issue. Lý do: status-marker hiện có sống trên file của chính branch đã merge; không có
   gì trong repo đảm bảo branch đó còn tồn tại sau merge (không có bước `--delete-branch` hay cấu
@@ -350,10 +379,10 @@ thật trên GitHub Actions.
 
 | Step | Expected Result |
 |------|-----------------|
-| 1. Review diff của `online-pipeline-finalize.yml`: job set-label (nghe `pull_request: closed`, có retry, không gọi `claude -p`) tách biệt với job finalize thật (trigger đổi sang `workflow_dispatch`, bước đọc slug/issue_number đổi sang đọc từ input, giữ nguyên concurrency group cũ, logic cũ + bước gỡ label + bước đóng issue) | 2 job tách biệt rõ ràng; job finalize thật không còn đọc `github.event.pull_request.head.ref`; concurrency group của job finalize thật không đổi so với bản gốc. |
+| 1. Review diff của `online-pipeline-finalize.yml`: job set-label (nghe `pull_request: closed`, có retry, defensive-create label nếu chưa tồn tại (AC1), không gọi `claude -p`) tách biệt với job finalize thật (trigger đổi sang `workflow_dispatch`, bước đọc slug/issue_number đổi sang đọc từ input, giữ nguyên concurrency group cũ, logic cũ + bước gỡ label + bước đóng issue) | 2 job tách biệt rõ ràng; job finalize thật không còn đọc `github.event.pull_request.head.ref`; concurrency group của job finalize thật không đổi so với bản gốc; label mới được tạo tự động nếu chưa có, không yêu cầu bước setup/migration riêng. |
 | 2. Review diff của `online-pipeline-implement.yml`: route job thêm check `work/completed/{slug}` (AC3), đọc marker `active_branch` từ issue body thay cho literal `feature/$SLUG` (AC13) ở TẤT CẢ call site (route job VÀ implement job: ls-remote, checkout, mọi lệnh push, `gh pr create`/`gh pr list --head`, text xác nhận, text prompt cho agent), thêm quyền `actions: write` cho job dispatch (AC10), mở rộng biểu thức `cancel-in-progress` để bao gồm action `post-merge` (AC8), và stage post-merge mới (AC5/AC6/AC8/AC9) | Thứ tự check đúng (completed trước label); nhánh "yêu cầu sửa thêm" dùng đúng công thức tính N (tính cả round 1, có `--limit`) và tên branch `feature/r{N}-{slug}`, gỡ label chỉ SAU KHI round mới tạo xong (không gỡ trước); nhánh "chốt" chỉ gọi `gh workflow run` kèm slug/issue_number, không có đoạn nào tự chạy logic finalize/archive/đóng issue trong chính job này; rà soát không còn SÓT bất kỳ literal `feature/$SLUG` nào trong implement job dùng cho mục đích xác định branch (đây là lỗi round validate trước đã tìm ra — chỉ sửa route job là chưa đủ). |
-| 3. Review hướng dẫn agent trong `SKILL.md` cho stage post-merge (3 nhánh phân loại) và cập nhật Naming Contract (marker `active_branch`, branch pattern `feature/r{N}-{slug}`) | Hướng dẫn rõ: agent tự nhận định, không có keyword filter cứng; nhánh sửa-thêm đọc lại `user-spec.md`/`decisions.md` gốc, không chạy lại interview, tự ghi marker; nhánh chốt chỉ dispatch, không tự archive; `implement-resume`/`implement-followup` trong `SKILL.md` không còn giả định cứng `feature/{slug}` mà dẫn chiếu marker. |
-| 4. Review đồng bộ vendored copies (`skills/project-initialization/assets/new-project/.github/workflows/`, mirror `.codex/`) | Nội dung khớp với bản nguồn trong `skills/online-pipeline/`, theo đúng "Setup Script Maintenance". |
+| 3. Review hướng dẫn agent trong `SKILL.md` cho stage post-merge (3 nhánh phân loại), cập nhật Naming Contract (marker `active_branch`, branch pattern `feature/r{N}-{slug}`), và mục "Hybrid Local/Online Switch" (AC15) | Hướng dẫn rõ: agent tự nhận định, không có keyword filter cứng; nhánh sửa-thêm đọc lại `user-spec.md`/`decisions.md` gốc, không chạy lại interview, tự ghi marker; nhánh chốt chỉ dispatch, không tự archive; `implement-resume`/`implement-followup` và Hybrid Switch (case 3, Comment failure and revert, Switch-to-local bước 2) trong `SKILL.md` không còn giả định cứng `feature/{slug}` mà dẫn chiếu marker. |
+| 4. Review đồng bộ vendored copy scaffold `project-initialization` theo "Setup Script Maintenance"; xác nhận `.codex/` tự đồng bộ qua pre-commit hook + finalize, không cần thao tác tay | Nội dung khớp với bản nguồn trong `skills/online-pipeline/`. |
 | 5. Kiểm tra YAML hợp lệ (`actionlint`/`yamllint` nếu có sẵn, hoặc ít nhất parse YAML) | Không có lỗi cú pháp trong các file workflow đã sửa. |
 
 ### User Verification
