@@ -39,14 +39,37 @@ scheme:
   issue number.
 - Feature folder: `work/{slug}/` (identical to local `user-spec-planning`/`code-writing` usage).
 - Spec branch: `userspec/{slug}`, spec PR label: `userspec-spec`.
-- Code branch: `feature/{slug}`, code PR label: `userspec-implement`.
+- Code branch: `feature/{slug}` for round 1 (unchanged, never renamed — see Accepted Decisions in
+  `work/online-pipeline-postmerge-followup/user-spec.md`), `feature/r{N}-{slug}` for round N≥2
+  (prefix at the START of the branch name, never the end, so the existing "trailing segment after
+  the last `-` is the issue number" rule keeps working unmodified for every round); code PR label,
+  every round: `userspec-implement`.
+- Merged-awaiting-followup label: `online-pipeline-merged-awaiting-followup`, applied only to the
+  GitHub issue (never a PR) by `online-pipeline-finalize.yml`'s `set-label` job the moment any
+  round's code PR merges — marks "code merged, issue open, waiting for the user's next comment to
+  classify" (stage post-merge below). Created defensively wherever it's applied/re-applied, exactly
+  like `userspec-spec`/`userspec-implement`. Removed only by stage post-merge (after a new round's
+  branch+PR+marker are fully in place) or by the `finalize` job (as a lock, the instant it starts;
+  re-applied if `finalize` fails after exhausting its own retries) — never by the route job itself.
+- `active_branch` marker: the line `<!-- online-pipeline: active_branch=feature/r{N}-{slug} -->` in
+  the issue body, written only by stage post-merge when it creates round N≥2 (via `gh issue edit`).
+  **Absent marker implicitly means round 1** (`feature/{slug}`) — stage `implement` itself never
+  writes this marker. Every place that needs "the branch of the round currently open" — in the
+  route job, the implement job, and the `SKILL.md` stage prompts for
+  `implement-resume`/`implement-followup` and the Hybrid Local/Online Switch below — reads this
+  marker (or defaults to `feature/{slug}` if absent) instead of assuming the literal
+  `feature/{slug}`. Parsed independently of the Slack mapping marker below (different line, own
+  pattern) — the two never conflict.
 - Status marker (written by the agent as its last action, read by the workflow, never read by
   another skill): `work/{slug}/logs/working/online-pipeline-status.yml`, a single line
   `status: {value}`. Values: `in_progress` (default — overwritten to this before every run, so a
   crash leaves no stale success signal), `awaiting_decision` (stopped for a user decision),
   `ready_for_review` (userspec stage only — validation clean, spec PR should be opened/updated),
   `ready_for_pr` (implement stage only — implementation complete; code PR opened on first success,
-  or updated in place on a later `implement-followup` round, see Stages below).
+  or updated in place on a later `implement-followup` round, see Stages below). Lives only on the
+  round's own branch, never on `main` — "this feature is fully done" is a separate signal
+  (`work/completed/{slug}` existing on `main`, see stage `finalize` below), deliberately not this
+  file, because a feature branch may or may not survive its own PR merging.
 - Automation signal: the literal string `ONLINE_PIPELINE_AUTOMATED`, included in every
   `userspec-turn` and `finalize` prompt (the two stages that call a modified skill). Not needed for
   `implement`/`implement-resume`/`implement-followup` — `code-writing` does not check for it.
@@ -202,18 +225,18 @@ the same Slack thread.
   commit and confirm" step (`implement-followup` only, see Stages below) relays its own
   confirmation comment the same deterministic way, directly — that comment is posted after
   "Implement with retry" already exited, so it falls outside that step's own before/after
-  comment-count diffing and needs its own `relay_to_slack` call.
+  comment-count diffing and needs its own `relay_to_slack` call. Its "Classify post-merge comment
+  and prepare round" step (stage `post-merge`, see Stages below) does the same before/after
+  comment-count diffing around its own `claude -p` call, so a Q&A reply posted there is mirrored
+  the same way; it also relays its own warning comment directly if label removal fails after a new
+  round is created (see Stages below), the same pattern as "Push followup commit and confirm".
 - `online-pipeline-knowledge-init.yml`'s "Run knowledge-init turn with retry" step, after every
   `claude -p` attempt, and its "Report technical failure" step after 3 failed attempts — the
   latter already ran as deterministic bash and is unaffected.
-- `online-pipeline-finalize.yml`'s "Report technical failure" step, after 3 failed attempts — this
-  one never involved the agent calling `relay_to_slack` either; unaffected.
-
-**The one exception — Slack-only, no GitHub equivalent:** when `finalize` completes successfully,
-`online-pipeline-finalize.yml` posts "✅ Feature xong" (or equivalent) via `relay_to_slack` only.
-There is no matching `gh issue comment` call for this (the GitHub issue is simply closed/archived
-by the finalize commit) and none should be added — this is the single net-new capability in this
-mirror set, not a gap to "fix" by also adding a GitHub-side post.
+- `online-pipeline-finalize.yml`'s `set-label` job relays its own technical-failure comment
+  directly (no `claude -p` call in that job at all — pure bash, see Naming Contract); its `finalize`
+  job's "Post completion comment, close issue, and relay" step relays the completion comment on
+  success, and its "Report technical failure" step relays after 3 failed attempts, same as always.
 
 **`!approve` and new-feature/new-project creation are entirely Worker-side**, not something any
 stage prompt here does: the Worker computes `slug` from `issue.title` + `issue.number` using the
@@ -237,14 +260,18 @@ behavior (retry the same token on every technical failure). See
 do, entirely in deterministic workflow bash — the agent itself never calls this endpoint and is
 unaware it exists.
 
-**What triggers it.** After every `claude -p` attempt in all three stages
-(`online-pipeline-userspec.yml`, `online-pipeline-implement.yml`,
-`online-pipeline-knowledge-init.yml`), the workflow bash checks the attempt's captured stdout/stderr
-for one of the two fixed, confirmed-real Claude rate-limit strings: `"You've hit your session
-limit"` (5-hour limit) or `"You've hit your weekly limit"` (7-day limit). Only these two fixed
-prefixes are matched — never a guessed variant — so a wording change on GitHub's side simply fails
-to match instead of mis-firing (see Risk 1 in the user-spec). No match: the attempt is handled
-exactly as any other technical failure, unchanged.
+**What triggers it.** After every `claude -p` attempt in all four stages that call it
+(`online-pipeline-userspec.yml`, `online-pipeline-implement.yml` — covering `implement`/
+`implement-resume`/`implement-followup` and stage `post-merge`'s own classification call,
+`online-pipeline-knowledge-init.yml`), the workflow bash checks the attempt's captured
+stdout/stderr for one of the two fixed, confirmed-real Claude rate-limit strings: `"You've hit your
+session limit"` (5-hour limit) or `"You've hit your weekly limit"` (7-day limit). Only these two
+fixed prefixes are matched — never a guessed variant — so a wording change on GitHub's side simply
+fails to match instead of mis-firing (see Risk 1 in the user-spec). No match: the attempt is
+handled exactly as any other technical failure, unchanged. Stage `post-merge`'s classify call
+resumes the same way as the others on a match (see "Rate-limit resume vs. ..." below) — a resumed
+attempt is instructed to finish classifying and write the decision file, not to redo the whole
+classification from scratch.
 
 **On a match**, the workflow extracts the `"resets {time} ({tz})"` segment from the same output and
 calls `POST $SLACK_WORKER_URL/switch-token/auto` with `X-Relay-Token: $SLACK_RELAY_TOKEN` (the same
@@ -269,8 +296,8 @@ secret already used for `/relay` — no new secret) and body `{owner, repo, rate
 
 **Stage-specific notes:**
 
-- All three stages (`implement`/`implement-resume`/`implement-followup`, `knowledge-init`,
-  `userspec-turn`) handle a
+- All four stages (`implement`/`implement-resume`/`implement-followup`, `post-merge`,
+  `knowledge-init`, `userspec-turn`) handle a
   rate-limited attempt the same way: a **rate-limit resume**. Instead of resetting and retrying from
   scratch, the workflow re-invokes `claude -p -c`/`--continue` with the new token, in the same
   working directory, with a short prompt announcing the token refresh instead of the stage's normal
@@ -393,10 +420,12 @@ workflow has already created `feature/{slug}` from `main` and checked it out.
 
 ### Stage: implement-resume
 
-Same as `implement`, except `feature/{slug}` already has a checkpoint commit from a prior
-`awaiting_decision` stop, and the prompt supplies the latest issue comment as the answer to the
-question you asked last time. Continue from the existing branch state — do not restart the
-implementation from `main`. The same three exit outcomes (steps 2–4 above) apply.
+Same as `implement`, except the round's branch (the workflow tells you its name — see the prompt's
+"Branch:" line, read from the `active_branch` marker per the Naming Contract, or `feature/{slug}`
+for round 1) already has a checkpoint commit from a prior `awaiting_decision` stop, and the prompt
+supplies the latest issue comment as the answer to the question you asked last time. Continue from
+the existing branch state — do not restart the implementation from `main`. The same three exit
+outcomes (steps 2–4 above) apply, against that same branch.
 
 If that comment is exactly `/switch-online`, it is a local switch-to-online handoff, not an answer
 to any question — this feature was implemented entirely locally up to this point (no prior
@@ -408,12 +437,15 @@ answer to a question that was never asked.
 
 ### Stage: implement-followup
 
-Triggered by a new issue comment while `feature/{slug}`'s code PR is still `OPEN` and the status
-marker already reads `ready_for_pr` — the normal "implementation already finished, PR open" state.
-The route job tells this apart from `implement-resume` purely from the status marker value (see
-Naming Contract): `awaiting_decision` dispatches `implement-resume` (an answer to a question this
-pipeline itself asked); `ready_for_pr` with the PR still open dispatches this stage instead (a new,
-unprompted request from the user).
+Triggered by a new issue comment while the round's branch (the workflow tells you its name via the
+prompt's "Branch:" line) has a code PR still `OPEN` and the status marker already reads
+`ready_for_pr` — the normal "implementation already finished, PR open" state. The route job tells
+this apart from `implement-resume` purely from the status marker value (see Naming Contract):
+`awaiting_decision` dispatches `implement-resume` (an answer to a question this pipeline itself
+asked); `ready_for_pr` with the PR still open dispatches this stage instead (a new, unprompted
+request from the user). This is the same mechanism a round N≥2 branch created by stage post-merge
+(below) reuses once its own code PR is open — "the round's branch" is never assumed to be literally
+`feature/{slug}` here.
 
 1. Decide first whether the latest issue comment is a genuine request for a code change, or just an
    acknowledgement/closing remark with nothing to act on (e.g. "ok cảm ơn"). If it is **not** a real
@@ -425,11 +457,11 @@ unprompted request from the user).
    run as a normal stop rather than a technical failure — but do **not** commit or push it: `origin`
    already holds `ready_for_pr` from before this run (that is exactly why this stage was dispatched
    in the first place), so there is nothing new to persist.
-2. Otherwise, treat the comment as a brand-new code-change request against the existing
-   `feature/{slug}` branch and its current code — never as an answer to a previously asked
-   question, even if an earlier `awaiting_decision` round happened at some point in this feature's
-   history. Run `code-writing`'s normal process (including its review waves), exactly as stage
-   `implement` does in its step 1.
+2. Otherwise, treat the comment as a brand-new code-change request against the existing round
+   branch (the "Branch:" line in the prompt) and its current code — never as an answer to a
+   previously asked question, even if an earlier `awaiting_decision` round happened at some point
+   in this feature's history. Run `code-writing`'s normal process (including its review waves),
+   exactly as stage `implement` does in its step 1.
 3. The same three exit outcomes as stage `implement` (steps 2–4) apply unchanged: a review-wave
    finding with `user_decision_required: true` writes `status: awaiting_decision`, commits, pushes,
    and asks via comment exactly like step 2 there (the next comment then goes through
@@ -440,21 +472,75 @@ unprompted request from the user).
    `online-pipeline-implement.yml`); any other exit is a technical failure retried by the workflow
    exactly like step 4 there.
 
+### Stage: post-merge
+
+Triggered by a new issue comment once any round's code PR has merged — the issue carries label
+`online-pipeline-merged-awaiting-followup` (set by `online-pipeline-finalize.yml`'s `set-label` job
+the instant that PR merged) and `work/completed/{slug}` does not exist on `main` yet. The issue
+stays open across every round; this stage is what lets the user keep talking to it after a merge
+instead of it falling through to `skip`. Your only job here is **classification** — all mechanics
+(branch/PR/label/marker creation, dispatching `finalize`) are deterministic workflow bash that runs
+after you exit, driven entirely by the one-word decision you write.
+
+1. Read the latest issue comment supplied in the prompt and classify it into exactly one of three
+   buckets. In every bucket, post a short comment yourself with `gh issue comment {issue_number}`
+   stating in natural language how you classified it — never stay silent, so a misclassification
+   (Risk 2) is immediately visible to the user, who can correct it with another comment right away
+   (the next comment preempts whatever this classification triggers — see AC8/concurrency below).
+   Do not call `relay_to_slack` yourself in any bucket — the workflow mirrors every one of these
+   comments after you exit.
+   - **Q&A/small talk** (e.g. "thanks", or a question about deploying the target repo — out of this
+     pipeline's scope): your comment is the actual answer. Do not touch any branch, PR, label, or
+     run `code-writing`.
+   - **A request for more code changes**: your comment just acknowledges that (e.g. "Đã hiểu là
+     yêu cầu sửa thêm — đang tạo round mới."). Beyond that comment, do nothing else yourself — the
+     workflow creates the new round's branch (empty, from `main`) and writes the `active_branch`
+     marker, removes the merged-awaiting-followup label once those two succeed (its PR is opened
+     later, the same way round 1's own PR is — only after there is an actual commit to open it
+     against; GitHub refuses a PR with no diff), and then calls you again as stage `implement` on
+     that new branch, with the same comment supplied as the task to implement (see stage
+     `implement-followup`'s step 2 framing — treat it as a new request, not an answer to a past
+     question).
+   - **A signal that the user is satisfied / wants to wrap up**: your comment just acknowledges
+     that (e.g. "Đã hiểu là tín hiệu muốn chốt — đang hoàn tất feature."). Beyond that comment, do
+     nothing else yourself — the workflow dispatches the real `finalize` job (`workflow_dispatch`
+     on `online-pipeline-finalize.yml`). Do not run `documentation-writing`, archive anything, or
+     close the issue yourself from this stage.
+2. Write your decision as the **only** content of the file path given to you as "Decision file" in
+   the prompt — exactly one of the three literal words `qa`, `followup`, or `finalize`, with no
+   other text. This is a plain local file for this job run only (never committed, never read by any
+   other run) — it is how the deterministic bash that called you learns your classification. Write
+   it as your last action, after you have already posted the comment required by step 1 above.
+3. This is agent-side judgment, not a keyword filter — there is no explicit `/finalize` command;
+   classify from the natural meaning of the comment the same way `implement-followup`'s step 1
+   already distinguishes a real request from an acknowledgement. A technical failure here (crash,
+   or exiting without writing one of the three exact words) is retried by the workflow up to 3
+   times, then reported like any other technical failure.
+
 ### Stage: finalize
 
-Triggered once, when the code PR (branch `feature/{slug}`, label `userspec-implement`) merges. Runs
-on `main` directly — there is no branch for this stage.
+Triggered by `workflow_dispatch` (inputs `slug`, `issue_number`) once stage post-merge above
+classifies a comment as "satisfied/wants to wrap up" and the workflow dispatches this job — no
+longer tied directly to any PR merge event (a round's code PR merging only ever sets the
+merged-awaiting-followup label now, via the separate `set-label` job in the same workflow file;
+see stage post-merge and the Naming Contract). Runs on `main` directly — there is no branch for
+this stage.
 
-1. Append `ONLINE_PIPELINE_AUTOMATED` to the context you hand `documentation-writing`'s Feature
+1. The workflow has already removed the merged-awaiting-followup label from the issue before
+   calling you (its lock against a race with another post-merge dispatch for this slug) — you do
+   not need to touch that label yourself on the success path; only its own failure-reporting step
+   re-applies it if you fail after exhausting retries.
+2. Append `ONLINE_PIPELINE_AUTOMATED` to the context you hand `documentation-writing`'s Feature
    Finalization Mode. Its automated branch skips "ask whether to continue finalization" and always
-   continues — the merge itself is the user's confirmation.
-2. Run `documentation-writing`'s Feature Finalization Mode exactly as written otherwise: update
+   continues — the dispatch itself is the user's confirmation.
+3. Run `documentation-writing`'s Feature Finalization Mode exactly as written otherwise: update
    Project Knowledge, move `work/{slug}/` to `work/completed/{slug}/`, commit.
-3. Commit straight to `main` (there is no finalize branch) and push. If anything fails before this
+4. Commit straight to `main` (there is no finalize branch) and push. If anything fails before this
    final commit/push, `main` is untouched — the workflow simply reruns this stage from a fresh
    checkout, no reset needed. If it fails after push (e.g. the connection drops right after), the
    next run's `work/completed/{slug}/` existence check (done by the workflow, not by you) already
-   detects completion and skips re-running you; you do not need your own idempotency check.
+   detects completion and skips re-running you; you do not need your own idempotency check. On
+   success, the workflow itself (not you) posts the completion comment and closes the issue.
 
 ### Stage: knowledge-init
 
@@ -570,12 +656,16 @@ Determine which case applies from the feature's current local state, then follow
    normal online flow — no new mechanism needed here.
 
 3. **Mid-implement** (code-writing has started against the approved spec but has not finished):
-   1. Check whether `feature/{slug}` already exists on `origin`
-      (`git ls-remote --exit-code --heads origin feature/{slug}`) **and remember the answer** — the
-      revert procedure below needs this exact fact, and by the time it might run, step 3 has already
-      pushed the branch, so re-running this same check then would always report "exists" regardless
-      of what was true before this attempt. Do not re-derive it later; carry it forward.
-   2. Read the current status marker if `feature/{slug}` already exists online. Unless it already
+   1. Determine the active branch first: read the `active_branch` marker from the issue body (see
+      Naming Contract) — default to `feature/{slug}` if the marker is absent (round 1, or a feature
+      that has never gone through stage post-merge). Then check whether that branch already exists
+      on `origin` (`git ls-remote --exit-code --heads origin {active_branch}`) **and remember the
+      answer** — the revert procedure below needs this exact fact, and by the time it might run,
+      step 3 has already pushed the branch, so re-running this same check then would always report
+      "exists" regardless of what was true before this attempt. Do not re-derive it later; carry it
+      forward (the branch name itself, not just the existence fact — this case never recomputes the
+      marker again later in this same procedure).
+   2. Read the current status marker if that branch already exists online. Unless it already
       reads exactly `status: awaiting_decision`, write `status: awaiting_decision` to
       `work/{slug}/logs/working/online-pipeline-status.yml` — the value
       `online-pipeline-implement.yml`'s route job compares the status marker against to dispatch
@@ -586,8 +676,12 @@ Determine which case applies from the feature's current local state, then follow
       job silently `action=skip` with no error shown anywhere. If it already reads
       `awaiting_decision`, leave it untouched (it may reflect genuine in-flight online state) and
       just commit the code changes.
-   3. Push current `HEAD` to `feature/{slug}` on `origin`:
-      `git push origin HEAD:refs/heads/feature/{slug}`.
+   3. Push current `HEAD` to that branch on `origin`:
+      `git push origin HEAD:refs/heads/{active_branch}`. If this is the very first time this
+      branch exists online for this feature (round 1, marker absent) only — no `active_branch`
+      marker write is needed here; stage `implement` itself never writes one (Naming Contract). If
+      the branch is a round N≥2 branch that a prior online post-merge round already created (marker
+      already present from that round), its marker is already correct and needs no change here.
    4. Remove the `local-placeholder` label from the issue — **before** the next step: the route job
       reads the label from the comment event's own payload snapshot, so removing it after would
       still show the old label to that event.
@@ -600,12 +694,16 @@ Determine which case applies from the feature's current local state, then follow
    remove the `local-placeholder` label from the issue, then open the code PR yourself exactly as
    `online-pipeline-implement.yml`'s "Open the code PR" step does (`gh pr create --base main --head
    feature/{slug} --label userspec-implement ...`, creating the label defensively first if missing).
-   The user merges it like any online PR to trigger `finalize` online — no status marker or
-   `/switch-online` comment needed for this case.
+   This always creates round 1, so no `active_branch` marker is needed here either (same reason as
+   stage `implement` itself). The user merges it like any online PR; that merge only sets the
+   `online-pipeline-merged-awaiting-followup` label now (see stage post-merge) — `finalize` itself
+   runs later, once the user signals "done" in a comment and stage post-merge dispatches it. No
+   status marker or `/switch-online` comment is needed for this case either way.
 
 5. **Finalize**: there is no mid-finalize switch. `finalize` commits straight to `main` with no
    checkpoint, so switching here only ever means choosing where to run it (local, see "Local
-   finalize" below, or online — merge the code PR as usual) before starting it, never during it.
+   finalize" below, or online — dispatched by stage post-merge after the code PR merges and the
+   user signals "done" in a comment) before starting it, never during it.
 
 #### Push conflicts
 
@@ -630,16 +728,17 @@ happened). So if posting the `/switch-online` comment fails (network loss, insuf
 permission) after the branch+marker push already succeeded: do not treat the switch as successful.
 GitHub is now in a state that looks ready to dispatch forever, waiting for a comment that may never
 arrive — any unrelated comment landing on that issue in the meantime would be misread as the answer
-to a question that was never asked. Revert immediately, using the fact you already determined and
-carried forward from case 3 step 1 (do not re-check `git ls-remote` now — the branch exists either
-way after step 3's push, so a fresh check cannot tell these two apart):
+to a question that was never asked. Revert immediately, using the active branch name and the
+existence fact you already determined and carried forward from case 3 step 1 (do not re-check
+`git ls-remote` now — the branch exists either way after step 3's push, so a fresh check cannot
+tell these two apart):
 
-- If you are confident `feature/{slug}` already existed online before this switch attempt (the fact
+- If you are confident that branch already existed online before this switch attempt (the fact
   carried forward from case 3 step 1): push the status marker back to whatever value it held before
   this attempt (or `in_progress` if that value itself is unknown) so the branch no longer reads
   `awaiting_decision`.
-- If you are confident this switch attempt created `feature/{slug}` for the first time: delete the
-  branch from `origin` (`git push origin --delete feature/{slug}`) instead of leaving a
+- If you are confident this switch attempt created that branch for the first time: delete the
+  branch from `origin` (`git push origin --delete {active_branch}`) instead of leaving a
   half-initialized one.
 - If you are not confident which of the two is true (e.g. a push-conflict resolution or anything
   else intervened between step 1 and now, long enough that you no longer trust your own carried-
@@ -653,7 +752,7 @@ way after step 3's push, so a fresh check cannot tell these two apart):
 Report the comment failure clearly to the user either way — the switch did not happen.
 
 If this revert step **also** fails (e.g. the network is still down): do not retry in a loop. Report
-a loud, explicit error telling the user exactly what to fix by hand — `feature/{slug}` may be stuck
+a loud, explicit error telling the user exactly what to fix by hand — the active branch may be stuck
 reading `awaiting_decision` with no real handoff behind it; delete the branch or fix the status
 marker on GitHub directly before reusing that issue. This is an accepted rare double-failure case
 for v1, not a case to build automatic recovery for.
@@ -672,8 +771,10 @@ worked on through GitHub (mid-interview-by-comment, or mid-implement possibly at
 1. Check the local working tree is clean (`git status --porcelain`). If it has uncommitted changes,
    stop immediately and report the error — ask the user to commit or stash first. Never stash
    automatically and never checkout over uncommitted work.
-2. If clean: `git fetch origin`, then checkout whichever of `feature/{slug}` or `userspec/{slug}`
-   currently exists and is further along (prefer `feature/{slug}` if both exist).
+2. If clean: `git fetch origin`, then checkout whichever of the active branch (the `active_branch`
+   marker in the issue body, or `feature/{slug}` if absent — see Naming Contract) or
+   `userspec/{slug}` currently exists and is further along (prefer the active branch if both
+   exist).
 3. Read that branch's state — the status marker if present, or
    `work/{slug}/logs/userspec/interview.yml` otherwise — and report plainly what is unresolved (the
    pending interview question, or the pending implementation decision/finding).
@@ -701,8 +802,9 @@ why instead. If the titles do match, run `gh issue close {issue_number}`; if tha
 it but do not roll back the already-completed finalize — the archive under `work/completed/{slug}/`
 stands either way. This applies regardless of whether the feature ever switched online and back; it
 is keyed on where finalize itself ran (locally), not on switch history. Finalize running through
-`online-pipeline-finalize.yml` is unaffected and keeps its current behavior — no auto-close is added
-there.
+`online-pipeline-finalize.yml` closes the issue itself on success (see stage `finalize` above) — the
+two paths now both end with the issue closed, just via different mechanics (this local procedure's
+own `gh issue close` vs. the workflow's).
 
 ## Modified Skills and Why
 

@@ -1,8 +1,10 @@
 name: Online Pipeline - Implement
 
-# Starts when the spec PR (branch userspec/{slug}, label userspec-spec) merges, and resumes when
-# the user answers a decision question asked mid-implementation. See
-# skills/online-pipeline/SKILL.md for the naming contract and per-stage agent instructions.
+# Starts when the spec PR (branch userspec/{slug}, label userspec-spec) merges, resumes when the
+# user answers a decision question asked mid-implementation, continues a followup request while a
+# round's code PR is still open, and classifies a comment that arrives after a round's code PR has
+# merged (post-merge: Q&A / new round / finalize signal). See skills/online-pipeline/SKILL.md for
+# the naming contract and per-stage agent instructions.
 
 on:
   pull_request:
@@ -14,6 +16,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 
 jobs:
   route:
@@ -25,6 +28,7 @@ jobs:
       action: ${{ steps.route.outputs.action }}
       slug: ${{ steps.route.outputs.slug }}
       issue_number: ${{ steps.route.outputs.issue_number }}
+      active_branch: ${{ steps.route.outputs.active_branch }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +41,7 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_LABELS_JSON: ${{ toJSON(github.event.issue.labels.*.name) }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
@@ -53,23 +58,49 @@ jobs:
           echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
           echo "issue_number=$ISSUE_NUMBER" >> "$GITHUB_OUTPUT"
 
-          if ! git ls-remote --exit-code --heads origin "feature/$SLUG" >/dev/null 2>&1; then
+          # AC3: idempotency check comes first, before any label/branch check — a feature already
+          # finalized never dispatches anything again, regardless of label/branch state (AC13).
+          if [ -d "work/completed/$SLUG" ]; then
             echo "action=skip" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git fetch origin "feature/$SLUG"
-          git checkout "feature/$SLUG"
+
+          # AC4: the merged-awaiting-followup label (set by online-pipeline-finalize.yml's
+          # set-label job) takes priority over any branch/status check below — once it's present,
+          # the round that just merged has no open branch/PR worth inspecting anymore; this comment
+          # is classified by stage post-merge instead.
+          if printf '%s' "$ISSUE_LABELS_JSON" | jq -e 'index("online-pipeline-merged-awaiting-followup") != null' >/dev/null; then
+            echo "action=post-merge" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # AC14: "branch of the currently open round" is read from the active_branch marker in the
+          # issue body, never re-derived by querying gh pr list — absent marker means round 1
+          # (feature/{slug}), the only case stage implement itself ever creates without writing one.
+          ISSUE_BODY="$(gh issue view "$ISSUE_NUMBER" --json body -q .body 2>/dev/null || true)"
+          ACTIVE_BRANCH="$(printf '%s' "$ISSUE_BODY" | grep -oP '(?<=active_branch=)\S+' || true)"
+          if [ -z "$ACTIVE_BRANCH" ]; then
+            ACTIVE_BRANCH="feature/$SLUG"
+          fi
+
+          if ! git ls-remote --exit-code --heads origin "$ACTIVE_BRANCH" >/dev/null 2>&1; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "active_branch=$ACTIVE_BRANCH" >> "$GITHUB_OUTPUT"
+          git fetch origin "$ACTIVE_BRANCH"
+          git checkout "$ACTIVE_BRANCH"
 
           STATUS_FILE="work/$SLUG/logs/working/online-pipeline-status.yml"
           CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
 
           if [ "$CURRENT_STATUS" = "awaiting_decision" ]; then
             echo "action=resume" >> "$GITHUB_OUTPUT"
-          elif [ "$CURRENT_STATUS" = "ready_for_pr" ] && [ -n "$(gh pr list --head "feature/$SLUG" --state open --json number -q '.[0].number' 2>/dev/null || true)" ]; then
+          elif [ "$CURRENT_STATUS" = "ready_for_pr" ] && [ -n "$(gh pr list --head "$ACTIVE_BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || true)" ]; then
             # Code PR still OPEN and implementation already finished once — this comment is a new
             # change request on top of it, not an answer to a question (that's "resume" above).
-            # Once the code PR merges (finalize runs), gh pr list --state open stops matching here,
-            # so a late comment correctly falls through to "skip" below (AC7) instead of reopening.
+            # Once the code PR merges, set-label sets the merged-awaiting-followup label and the
+            # AC4 branch above takes over on the next comment instead of falling through here.
             echo "action=followup" >> "$GITHUB_OUTPUT"
           else
             echo "action=skip" >> "$GITHUB_OUTPUT"
@@ -77,18 +108,20 @@ jobs:
 
   implement:
     needs: route
-    if: needs.route.outputs.action == 'start' || needs.route.outputs.action == 'resume' || needs.route.outputs.action == 'followup'
+    if: needs.route.outputs.action == 'start' || needs.route.outputs.action == 'resume' || needs.route.outputs.action == 'followup' || needs.route.outputs.action == 'post-merge'
     runs-on: ubuntu-latest
     concurrency:
       group: online-pipeline-implement-${{ needs.route.outputs.slug }}
       # A new followup comment should pre-empt whatever else is running/queued for this slug
-      # (start/resume/an earlier followup) to prioritize the latest request (AC5); start/resume
-      # keep queuing as before — unchanged for those two actions.
-      cancel-in-progress: ${{ needs.route.outputs.action == 'followup' }}
+      # (start/resume/an earlier followup) to prioritize the latest request (AC5); a new comment
+      # arriving while a prior post-merge classification is still running (AC8) does the same —
+      # start/resume keep queuing as before, unchanged for those two actions.
+      cancel-in-progress: ${{ needs.route.outputs.action == 'followup' || needs.route.outputs.action == 'post-merge' }}
     env:
       SLUG: ${{ needs.route.outputs.slug }}
       ISSUE_NUMBER: ${{ needs.route.outputs.issue_number }}
       ROUTE_ACTION: ${{ needs.route.outputs.action }}
+      ROUTE_ACTIVE_BRANCH: ${{ needs.route.outputs.active_branch }}
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -115,42 +148,61 @@ jobs:
           set -euo pipefail
           git config user.email "online-pipeline[bot]@users.noreply.github.com"
           git config user.name "online-pipeline[bot]"
-          if [ "$ROUTE_ACTION" = "start" ]; then
-            git push origin "HEAD:refs/heads/feature/$SLUG"
-          fi
-          git fetch origin "feature/$SLUG"
-          git checkout "feature/$SLUG"
 
-          STATUS_FILE="work/$SLUG/logs/working/online-pipeline-status.yml"
-          if [ "$ROUTE_ACTION" = "resume" ]; then
-            # route decided "resume" from a snapshot taken before this job's own concurrency gate
-            # (online-pipeline-implement-$SLUG) was acquired. If a second qualifying comment queued
-            # up behind an in-flight resume for the same slug, that earlier run may have already
-            # finished (or hit a later stop) by the time this one starts, making this decision and
-            # its paired comment stale. Re-check the just-fetched branch state now, post-gate, and
-            # skip rather than act on stale data.
-            CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
-            if [ "$CURRENT_STATUS" != "awaiting_decision" ]; then
-              echo "Resume request is stale (branch status is now '$CURRENT_STATUS', not awaiting_decision) — a prior queued run for this feature already handled it. Skipping."
-              echo "STALE=true" >> "$GITHUB_ENV"
+          if [ "$ROUTE_ACTION" = "start" ]; then
+            ACTIVE_BRANCH="feature/$SLUG"
+            echo "IMPLEMENT_ACTION=start" >> "$GITHUB_ENV"
+            echo "ACTIVE_BRANCH=$ACTIVE_BRANCH" >> "$GITHUB_ENV"
+            git push origin "HEAD:refs/heads/$ACTIVE_BRANCH"
+            git fetch origin "$ACTIVE_BRANCH"
+            git checkout "$ACTIVE_BRANCH"
+            mkdir -p "work/$SLUG/logs/working"
+            printf 'status: in_progress\n' > "work/$SLUG/logs/working/online-pipeline-status.yml"
+
+          elif [ "$ROUTE_ACTION" = "resume" ] || [ "$ROUTE_ACTION" = "followup" ]; then
+            ACTIVE_BRANCH="$ROUTE_ACTIVE_BRANCH"
+            echo "IMPLEMENT_ACTION=$ROUTE_ACTION" >> "$GITHUB_ENV"
+            echo "ACTIVE_BRANCH=$ACTIVE_BRANCH" >> "$GITHUB_ENV"
+            git fetch origin "$ACTIVE_BRANCH"
+            git checkout "$ACTIVE_BRANCH"
+
+            STATUS_FILE="work/$SLUG/logs/working/online-pipeline-status.yml"
+            if [ "$ROUTE_ACTION" = "resume" ]; then
+              # route decided "resume" from a snapshot taken before this job's own concurrency gate
+              # (online-pipeline-implement-$SLUG) was acquired. If a second qualifying comment
+              # queued up behind an in-flight resume for the same slug, that earlier run may have
+              # already finished (or hit a later stop) by the time this one starts, making this
+              # decision and its paired comment stale. Re-check the just-fetched branch state now,
+              # post-gate, and skip rather than act on stale data.
+              CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
+              if [ "$CURRENT_STATUS" != "awaiting_decision" ]; then
+                echo "Resume request is stale (branch status is now '$CURRENT_STATUS', not awaiting_decision) — a prior queued run for this feature already handled it. Skipping."
+                echo "STALE=true" >> "$GITHUB_ENV"
+              fi
+            elif [ "$ROUTE_ACTION" = "followup" ]; then
+              # Same staleness problem as resume above, plus a second one specific to followup: by
+              # the time this job gets its turn in the shared concurrency group, a run that was
+              # ahead of it may have already committed a newer terminal status
+              # (ready_for_pr/awaiting_decision from its own followup or decision), or the PR may
+              # have merged while this job waited. Re-check both post-gate (AC8) and skip rather
+              # than act on stale data.
+              CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
+              EXISTING_PR="$(gh pr list --head "$ACTIVE_BRANCH" --state open --json number -q '.[0].number' 2>/dev/null || true)"
+              if [ "$CURRENT_STATUS" != "ready_for_pr" ] || [ -z "$EXISTING_PR" ]; then
+                echo "Followup request is stale (branch status is now '$CURRENT_STATUS', PR open: $([ -n "$EXISTING_PR" ] && echo yes || echo no)) — a newer run already handled this feature, or its PR merged while this job waited. Skipping."
+                echo "STALE=true" >> "$GITHUB_ENV"
+              fi
             fi
-          elif [ "$ROUTE_ACTION" = "followup" ]; then
-            # Same staleness problem as resume above, plus a second one specific to followup: by
-            # the time this job gets its turn in the shared concurrency group, a run that was ahead
-            # of it may have already committed a newer terminal status (ready_for_pr/
-            # awaiting_decision from its own followup or decision), or the PR may have merged while
-            # this job waited (finalize never touches this branch's status marker, so only the
-            # PR-open check catches that). Re-check both post-gate (AC8) and skip rather than act on
-            # stale data.
-            CURRENT_STATUS="$(grep -oP '(?<=^status: ).*' "$STATUS_FILE" 2>/dev/null || echo "")"
-            EXISTING_PR="$(gh pr list --head "feature/$SLUG" --state open --json number -q '.[0].number' 2>/dev/null || true)"
-            if [ "$CURRENT_STATUS" != "ready_for_pr" ] || [ -z "$EXISTING_PR" ]; then
-              echo "Followup request is stale (branch status is now '$CURRENT_STATUS', PR open: $([ -n "$EXISTING_PR" ] && echo yes || echo no)) — a newer run already handled this feature, or its PR merged while this job waited. Skipping."
-              echo "STALE=true" >> "$GITHUB_ENV"
-            fi
+            mkdir -p "work/$SLUG/logs/working"
+            printf 'status: in_progress\n' > "$STATUS_FILE"
+
+          else
+            # post-merge: nothing to check out yet — stay on the default branch (main). The
+            # "Classify post-merge comment and prepare round" step below handles everything,
+            # including setting IMPLEMENT_ACTION/ACTIVE_BRANCH itself if it creates a new round.
+            echo "IMPLEMENT_ACTION=" >> "$GITHUB_ENV"
+            echo "ACTIVE_BRANCH=" >> "$GITHUB_ENV"
           fi
-          mkdir -p "work/$SLUG/logs/working"
-          printf 'status: in_progress\n' > "$STATUS_FILE"
 
       - name: Select Claude auth method
         if: env.STALE != 'true'
@@ -173,8 +225,206 @@ jobs:
         if: env.STALE != 'true'
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Classify post-merge comment and prepare round
+        if: env.STALE != 'true' && env.ROUTE_ACTION == 'post-merge'
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+
+          relay_to_slack() {
+            local issue_number="$1" text="$2"
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 0
+            fi
+            local issue_body channel_id thread_ts
+            issue_body="$(gh issue view "$issue_number" --json body -q .body)"
+            channel_id="$(printf '%s' "$issue_body" | grep -oP '(?<=channel_id=)\S+' || true)"
+            thread_ts="$(printf '%s' "$issue_body" | grep -oP '(?<=thread_ts=)\S+' || true)"
+            if [ -z "$channel_id" ]; then
+              return 0
+            fi
+            curl -fsS -X POST "$SLACK_WORKER_URL/relay" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg c "$channel_id" --arg t "$thread_ts" --arg x "$text" \
+                    '{channel_id:$c, thread_ts:$t, text:$x}')" || true
+          }
+
+          # Same rate-limit auto-switch as "Implement with retry" below (see SKILL.md) — this
+          # call site was originally left out as a plain ATTEMPTS=3 retry (a one-word
+          # classification seemed low-value enough to skip the pool-switch machinery), but a real
+          # session-limit hit during rollout showed that skipping it just means stage post-merge
+          # fails more often than its neighbors right when CI usage is heaviest (immediately after
+          # an implement round). Added for consistency with every other claude -p call in this file.
+          try_rate_limit_switch() {
+            if ! grep -qF "You've hit your session limit" "$CLAUDE_OUTPUT_FILE" \
+               && ! grep -qF "You've hit your weekly limit" "$CLAUDE_OUTPUT_FILE"; then
+              return 1
+            fi
+            if [ -z "${SLACK_RELAY_TOKEN:-}" ] || [ -z "${SLACK_WORKER_URL:-}" ]; then
+              return 1
+            fi
+            local reset_text resp ok err
+            reset_text="$(grep -oP "resets .*\)" "$CLAUDE_OUTPUT_FILE" | tail -1 || true)"
+            resp="$(curl -fsS -X POST "$SLACK_WORKER_URL/switch-token/auto" \
+              -H "X-Relay-Token: $SLACK_RELAY_TOKEN" -H "Content-Type: application/json" \
+              -d "$(jq -n --arg o "${GITHUB_REPOSITORY%%/*}" --arg r "${GITHUB_REPOSITORY##*/}" --arg t "$reset_text" \
+                    '{owner:$o, repo:$r, rateLimitResetText:$t}')" 2>/dev/null || true)"
+            ok="$(printf '%s' "$resp" | jq -r '.ok // false' 2>/dev/null || echo false)"
+            if [ "$ok" = "true" ]; then
+              CURRENT_TOKEN="$(printf '%s' "$resp" | jq -r '.token')"
+              echo "Rate limit detected — switched to pool alias $(printf '%s' "$resp" | jq -r '.alias')."
+              return 0
+            fi
+            err="$(printf '%s' "$resp" | jq -r '.error // ""' 2>/dev/null || echo "")"
+            if [ "$err" = "no_alias_available" ]; then
+              SWITCH_EXHAUSTED=true
+            fi
+            return 1
+          }
+
+          DECISION_FILE="$(mktemp)"
+          ATTEMPTS=3
+          RESULT="technical_error"
+          DECISION=""
+          CURRENT_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
+          RATE_LIMIT_RESUME_COUNT=0
+          BEFORE_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+
+          for ATTEMPT in 1 2 3; do
+            echo "Post-merge classify attempt $ATTEMPT/$ATTEMPTS"
+            rm -f "$DECISION_FILE"
+
+            PROMPT="Use the online-pipeline skill (.claude/skills/online-pipeline/SKILL.md), stage \"post-merge\".
+          Issue: #$ISSUE_NUMBER
+          Feature slug: $SLUG
+          Feature folder: work/$SLUG
+          Decision file: $DECISION_FILE
+
+          Latest issue comment (classify this):
+          $COMMENT_BODY"
+            CLAUDE_FLAGS=(-p)
+            CLAUDE_PROMPT_TEXT="$PROMPT"
+
+            while true; do
+              CLAUDE_OUTPUT_FILE="$(mktemp)"
+              set +e
+              CLAUDE_CODE_OAUTH_TOKEN="$CURRENT_TOKEN" SLACK_RELAY_TOKEN="" SLACK_WORKER_URL="" \
+                claude "${CLAUDE_FLAGS[@]}" "$CLAUDE_PROMPT_TEXT" --dangerously-skip-permissions 2>&1 | tee "$CLAUDE_OUTPUT_FILE"
+              set -e
+
+              AFTER_COMMENT_COUNT="$(gh issue view "$ISSUE_NUMBER" --json comments --jq '.comments | length')"
+              if [ "$AFTER_COMMENT_COUNT" -gt "$BEFORE_COMMENT_COUNT" ]; then
+                while IFS= read -r COMMENT_JSON; do
+                  COMMENT_TEXT="$(printf '%s' "$COMMENT_JSON" | jq -r '.')"
+                  relay_to_slack "$ISSUE_NUMBER" "$COMMENT_TEXT"
+                done < <(gh issue view "$ISSUE_NUMBER" --json comments --jq ".comments[$BEFORE_COMMENT_COUNT:]" \
+                          | jq -c '.[] | select(.author.login == "github-actions") | .body')
+              fi
+              BEFORE_COMMENT_COUNT="$AFTER_COMMENT_COUNT"
+
+              DECISION="$(tr -d '[:space:]' < "$DECISION_FILE" 2>/dev/null || true)"
+              if [ "$DECISION" = "qa" ] || [ "$DECISION" = "followup" ] || [ "$DECISION" = "finalize" ]; then
+                RESULT="success"
+                break 2
+              fi
+
+              echo "Technical failure on attempt $ATTEMPT (decision file content: '$DECISION')."
+              if try_rate_limit_switch; then
+                RATE_LIMIT_RESUME_COUNT=$((RATE_LIMIT_RESUME_COUNT + 1))
+                echo "Rate-limit resume #$RATE_LIMIT_RESUME_COUNT — continuing previous session with new token"
+                CLAUDE_FLAGS=(-p -c)
+                CLAUDE_PROMPT_TEXT="Your Claude Code token was refreshed after a rate limit. Continue exactly where you left off — finish classifying and write the decision file exactly as instructed."
+                continue
+              elif [ "${SWITCH_EXHAUSTED:-false}" = "true" ]; then
+                RESULT="rate_limit_pool_exhausted"
+                break 2
+              fi
+              break
+            done
+          done
+
+          if [ "$RESULT" = "rate_limit_pool_exhausted" ]; then
+            echo "RESULT=rate_limit_pool_exhausted" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ "$RESULT" != "success" ]; then
+            echo "RESULT=technical_error" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ "$DECISION" = "qa" ]; then
+            # Agent already posted its own short reply comment (see SKILL.md stage post-merge) —
+            # nothing else to do: no branch/PR, no label change, no code-writing (AC5).
+            echo "RESULT=success" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          if [ "$DECISION" = "finalize" ]; then
+            DISPATCH_OK=false
+            for ATTEMPT in 1 2 3; do
+              if gh workflow run online-pipeline-finalize.yml -f slug="$SLUG" -f issue_number="$ISSUE_NUMBER"; then
+                DISPATCH_OK=true
+                break
+              fi
+              echo "gh workflow run failed on attempt $ATTEMPT."
+            done
+            if [ "$DISPATCH_OK" = "true" ]; then
+              echo "RESULT=success" >> "$GITHUB_ENV"
+            else
+              echo "RESULT=technical_error" >> "$GITHUB_ENV"
+            fi
+            exit 0
+          fi
+
+          # DECISION = "followup": compute N (AC6) — round 1, with no prefix, always counts, so the
+          # first follow-up always yields round 2 — create the new round branch from main (empty,
+          # zero commits yet — exactly like ROUTE_ACTION=start's own branch creation) and write the
+          # active_branch marker. PR creation is deliberately NOT done here: GitHub refuses to open
+          # a PR with no diff between branches ("No commits between main and feature/r{N}-..."),
+          # the same reason stage `implement`'s own "start" path never opens round 1's PR until
+          # after code-writing's first commit either — it is deferred to the existing "Open the
+          # code PR" step below (gated on IMPLEMENT_ACTION == 'start', which this branch sets),
+          # which runs once "Implement with retry" actually has something to push. Only once
+          # branch+marker succeed is the merged-awaiting-followup label removed (Constraints: never
+          # remove it before a new round is fully in place) — "PR" in that Constraint is satisfied
+          # by the same deferred-creation guarantee round 1 already relies on, not a literal
+          # precondition GitHub's API can satisfy at this exact point.
+          EXISTING_ROUNDS="$(gh pr list --state all --limit 1000 --json headRefName -q '.[].headRefName' \
+            | grep -cE "^feature/(r[0-9]+-)?${SLUG}\$" || true)"
+          N=$((EXISTING_ROUNDS + 1))
+          NEW_BRANCH="feature/r${N}-${SLUG}"
+
+          if git checkout -b "$NEW_BRANCH" && git push origin "HEAD:refs/heads/$NEW_BRANCH"; then
+            ISSUE_BODY="$(gh issue view "$ISSUE_NUMBER" --json body -q .body)"
+            NEW_BODY="$(printf '%s\n' "$ISSUE_BODY" | grep -v '<!-- online-pipeline: active_branch=' || true)"
+            if printf '%s\n\n<!-- online-pipeline: active_branch=%s -->\n' "$NEW_BODY" "$NEW_BRANCH" | gh issue edit "$ISSUE_NUMBER" --body-file -; then
+              LABEL_REMOVED=false
+              for ATTEMPT in 1 2 3; do
+                if gh issue edit "$ISSUE_NUMBER" --remove-label online-pipeline-merged-awaiting-followup; then
+                  LABEL_REMOVED=true
+                  break
+                fi
+              done
+              if [ "$LABEL_REMOVED" != "true" ]; then
+                WARN_MESSAGE="Round $N đã tạo xong (branch $NEW_BRANCH) nhưng không gỡ được label online-pipeline-merged-awaiting-followup sau 3 lần thử — vui lòng gỡ label này bằng tay trên GitHub để route job không hiểu nhầm comment tiếp theo."
+                gh issue comment "$ISSUE_NUMBER" --body "$WARN_MESSAGE" || true
+                relay_to_slack "$ISSUE_NUMBER" "$WARN_MESSAGE"
+              fi
+              echo "IMPLEMENT_ACTION=start" >> "$GITHUB_ENV"
+              echo "ACTIVE_BRANCH=$NEW_BRANCH" >> "$GITHUB_ENV"
+              mkdir -p "work/$SLUG/logs/working"
+              printf 'status: in_progress\n' > "work/$SLUG/logs/working/online-pipeline-status.yml"
+              echo "RESULT=success" >> "$GITHUB_ENV"
+            else
+              echo "RESULT=technical_error" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "RESULT=technical_error" >> "$GITHUB_ENV"
+          fi
+
       - name: Implement with retry
-        if: env.STALE != 'true'
+        if: env.STALE != 'true' && env.IMPLEMENT_ACTION != '' && env.RESULT != 'technical_error'
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -235,9 +485,9 @@ jobs:
           }
 
           STAGE_NAME="implement"
-          if [ "$ROUTE_ACTION" = "resume" ]; then
+          if [ "$IMPLEMENT_ACTION" = "resume" ]; then
             STAGE_NAME="implement-resume"
-          elif [ "$ROUTE_ACTION" = "followup" ]; then
+          elif [ "$IMPLEMENT_ACTION" = "followup" ]; then
             STAGE_NAME="implement-followup"
           fi
 
@@ -263,7 +513,7 @@ jobs:
               echo "Issue: #$ISSUE_NUMBER"
               echo "Feature slug: $SLUG"
               echo "Feature folder: work/$SLUG"
-              echo "Branch: feature/$SLUG"
+              echo "Branch: $ACTIVE_BRANCH"
               if [ "$STAGE_NAME" = "implement-resume" ]; then
                 echo ""
                 echo "Latest issue comment (answer to the question you asked last time):"
@@ -271,6 +521,10 @@ jobs:
               elif [ "$STAGE_NAME" = "implement-followup" ]; then
                 echo ""
                 echo "Latest issue comment (a NEW code-change request on the already-open PR — not an answer to a prior question):"
+                echo "$COMMENT_BODY"
+              elif [ "$ROUTE_ACTION" = "post-merge" ]; then
+                echo ""
+                echo "Latest issue comment (the follow-up request for this new round — read work/$SLUG/user-spec.md and decisions.md for full context; do not re-run the interview):"
                 echo "$COMMENT_BODY"
               fi
             } > "$PROMPT_FILE"
@@ -335,7 +589,7 @@ jobs:
             done
 
             if [ "$ATTEMPT" -lt "$ATTEMPTS" ]; then
-              git push --force origin "$LAST_GOOD:refs/heads/feature/$SLUG"
+              git push --force origin "$LAST_GOOD:refs/heads/$ACTIVE_BRANCH"
               git reset --hard "$LAST_GOOD"
               git clean -fd
             fi
@@ -350,21 +604,21 @@ jobs:
           echo "FOLLOWUP_BASELINE_SHA=$LAST_GOOD" >> "$GITHUB_ENV"
 
       - name: Open the code PR
-        if: env.RESULT == 'success' && needs.route.outputs.action != 'followup'
+        if: env.RESULT == 'success' && (env.IMPLEMENT_ACTION == 'start' || env.IMPLEMENT_ACTION == 'resume')
         run: |
           set -euo pipefail
-          git push origin "HEAD:refs/heads/feature/$SLUG" || true
-          EXISTING="$(gh pr list --head "feature/$SLUG" --state open --json number -q '.[0].number' || true)"
+          git push origin "HEAD:refs/heads/$ACTIVE_BRANCH" || true
+          EXISTING="$(gh pr list --head "$ACTIVE_BRANCH" --state open --json number -q '.[0].number' || true)"
           if [ -z "$EXISTING" ]; then
             gh label list --json name -q '.[].name' | grep -qx userspec-implement || gh label create userspec-implement --description "online-pipeline" --color "1D76DB"
-            gh pr create --base main --head "feature/$SLUG" \
+            gh pr create --base main --head "$ACTIVE_BRANCH" \
               --title "feature: $SLUG" \
-              --body "Auto-generated by online-pipeline from work/$SLUG/user-spec.md. Review and merge to trigger finalize." \
+              --body "Auto-generated by online-pipeline from work/$SLUG/user-spec.md. Review and merge to continue." \
               --label userspec-implement
           fi
 
       - name: Push followup commit and confirm
-        if: env.RESULT == 'success' && needs.route.outputs.action == 'followup'
+        if: env.RESULT == 'success' && env.IMPLEMENT_ACTION == 'followup'
         run: |
           set -euo pipefail
 
@@ -400,8 +654,8 @@ jobs:
           # push genuinely landed on origin (AC3). A real push failure here is a technical error,
           # not a signal to post a false confirmation — report it the same way the existing
           # ATTEMPTS-retry failure path does (see "Report technical failure" below) instead.
-          if git push origin "HEAD:refs/heads/feature/$SLUG"; then
-            MESSAGE="Đã cập nhật PR feature/$SLUG theo yêu cầu follow-up mới nhất."
+          if git push origin "HEAD:refs/heads/$ACTIVE_BRANCH"; then
+            MESSAGE="Đã cập nhật PR $ACTIVE_BRANCH theo yêu cầu follow-up mới nhất."
             gh issue comment "$ISSUE_NUMBER" --body "$MESSAGE"
             relay_to_slack "$ISSUE_NUMBER" "$MESSAGE"
           else
